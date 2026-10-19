@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.hermes/
+tests/e2e/.out/
+docs/.issue-map.json
+*.log
+.DS_Store

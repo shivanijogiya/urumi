@@ -1,0 +1,521 @@
+[
+  {
+    "key": "B01",
+    "title": "Repo skeleton: npm workspaces, lint, CI skeleton, MIT license",
+    "app": "infra",
+    "req": [
+      "K2"
+    ],
+    "deps": [],
+    "est_h": 1.5,
+    "labels": [],
+    "acceptance": [
+      "npm install && npm test --workspaces succeed on an empty skeleton",
+      "GitLab pipeline runs lint + test stages green",
+      "LICENSE (MIT) at repo root and detected by GitLab"
+    ]
+  },
+  {
+    "key": "B02",
+    "title": "k3d cluster script with local registry and *.localtest.me ingress",
+    "app": "infra",
+    "req": [
+      "K1",
+      "K5"
+    ],
+    "deps": [
+      "B01"
+    ],
+    "est_h": 1.5,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "scripts/cluster-up.sh creates the cluster idempotently",
+      "A test nginx Ingress answers on http://test.localtest.me",
+      "Secrets are created from gitignored .env.local"
+    ]
+  },
+  {
+    "key": "B03",
+    "title": "Helm chart: MariaDB + WordPress with PVCs, probes, limits, Ingress",
+    "app": "infra",
+    "req": [
+      "K3",
+      "K4",
+      "K5",
+      "K6"
+    ],
+    "deps": [
+      "B02"
+    ],
+    "est_h": 3,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "helm lint passes",
+      "http://store.localtest.me loads WordPress",
+      "Deleting the WordPress and MariaDB pods keeps content (PVC)",
+      "Every workload has probes and requests/limits"
+    ]
+  },
+  {
+    "key": "B04",
+    "title": "Store bootstrap Job: install WooCommerce, enable COD, create Application Password into a Secret",
+    "app": "infra",
+    "req": [
+      "W4",
+      "K6",
+      "D1"
+    ],
+    "deps": [
+      "B03"
+    ],
+    "est_h": 3,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "Fresh install ends with WooCommerce active and COD enabled",
+      "Application Password stored only in a Kubernetes Secret",
+      "REST call to /wp-json/wc/v3/orders with that password returns 200",
+      "D1 manual checkout works and the order shows in admin"
+    ]
+  },
+  {
+    "key": "B05",
+    "title": "Contracts: gateway HTTP API, MCP endpoint, DB schema, tool naming, error envelope",
+    "app": "contracts",
+    "req": [
+      "G1",
+      "G2",
+      "G3",
+      "T1",
+      "T2",
+      "T3"
+    ],
+    "deps": [
+      "B01"
+    ],
+    "est_h": 2.5,
+    "labels": [
+      "gate::contracts"
+    ],
+    "acceptance": [
+      "packages/contracts exports typed API, error envelope, qualified-name helpers",
+      "DB schema (users, sessions, api_keys, upstreams, audit_log) as a migration",
+      "ADR 001 records the decisions",
+      "Aadi approves (G1)"
+    ]
+  },
+  {
+    "key": "B06",
+    "title": "woo-mcp server scaffold: Streamable HTTP, shared-secret auth, healthz, WooCommerce client",
+    "app": "woo-mcp",
+    "req": [
+      "W1",
+      "W2"
+    ],
+    "deps": [
+      "B05"
+    ],
+    "est_h": 2,
+    "labels": [],
+    "acceptance": [
+      "tools/list works over Streamable HTTP",
+      "Requests without the shared secret get 401",
+      "Woo client has 10 s timeouts and maps errors to the envelope"
+    ]
+  },
+  {
+    "key": "B07",
+    "title": "woo-mcp tools: list_products, create_product",
+    "app": "woo-mcp",
+    "req": [
+      "W2"
+    ],
+    "deps": [
+      "B06",
+      "B04"
+    ],
+    "est_h": 2,
+    "labels": [],
+    "acceptance": [
+      "Unit tests for schema, happy path, 404/401/timeout",
+      "Against the cluster: create_product then list_products returns it"
+    ]
+  },
+  {
+    "key": "B08",
+    "title": "woo-mcp tools: list_orders (date filter, Asia/Kolkata), get_order, update_order_status",
+    "app": "woo-mcp",
+    "req": [
+      "W2"
+    ],
+    "deps": [
+      "B07"
+    ],
+    "est_h": 3,
+    "labels": [],
+    "acceptance": [
+      "list_orders date=today returns an order placed today",
+      "update_order_status rejects unknown statuses",
+      "Unit tests for every tool"
+    ]
+  },
+  {
+    "key": "B09",
+    "title": "woo-mcp in the chart: ClusterIP, no Ingress, NetworkPolicy gateway-only",
+    "app": "infra",
+    "req": [
+      "W3",
+      "K5"
+    ],
+    "deps": [
+      "B06",
+      "B03"
+    ],
+    "est_h": 1.5,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "A curl pod without the gateway label cannot reach woo-mcp",
+      "The gateway pod can",
+      "No Ingress exists for woo-mcp"
+    ]
+  },
+  {
+    "key": "B10",
+    "title": "Postgres in the chart + gateway migrations and seed admin",
+    "app": "gateway",
+    "req": [
+      "K3",
+      "K4"
+    ],
+    "deps": [
+      "B05",
+      "B03"
+    ],
+    "est_h": 2,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "Migrations run on gateway start",
+      "Initial admin created from a Secret",
+      "Data survives pod deletion"
+    ]
+  },
+  {
+    "key": "B11",
+    "title": "Gateway upstream registry: CRUD, encrypted credentials, SSRF guard",
+    "app": "gateway",
+    "req": [
+      "G1",
+      "G5"
+    ],
+    "deps": [
+      "B10"
+    ],
+    "est_h": 3,
+    "labels": [],
+    "acceptance": [
+      "Admin can add/edit/disable/remove upstreams",
+      "Credential never returned by any API",
+      "SSRF tests: metadata IP, loopback, private ranges blocked unless allow-listed"
+    ]
+  },
+  {
+    "key": "B12",
+    "title": "Gateway aggregation, routing, collision naming, timeouts, health checks",
+    "app": "gateway",
+    "req": [
+      "G2",
+      "G3",
+      "G4"
+    ],
+    "deps": [
+      "B11"
+    ],
+    "est_h": 4,
+    "labels": [],
+    "acceptance": [
+      "Two fake upstreams with the same tool name both callable via qualified names",
+      "A slow upstream does not delay listing beyond 3 s",
+      "A dead upstream is marked down and its tools hidden"
+    ]
+  },
+  {
+    "key": "B14",
+    "title": "Users, roles, sessions; API keys (show once, SHA-256, revoke)",
+    "app": "gateway",
+    "req": [
+      "T1",
+      "T2"
+    ],
+    "deps": [
+      "B10"
+    ],
+    "est_h": 3,
+    "labels": [],
+    "acceptance": [
+      "Admin can create members and roles",
+      "Key shown once, stored hashed",
+      "Revoked key rejected on next call"
+    ]
+  },
+  {
+    "key": "B13",
+    "title": "Gateway external MCP endpoint (Streamable HTTP) with API-key auth",
+    "app": "gateway",
+    "req": [
+      "G2",
+      "T2"
+    ],
+    "deps": [
+      "B12",
+      "B14"
+    ],
+    "est_h": 2.5,
+    "labels": [],
+    "acceptance": [
+      "MCP Inspector connects with URL + key and lists tools",
+      "Calls route through callTool",
+      "Missing/invalid/revoked key → 401"
+    ]
+  },
+  {
+    "key": "B15",
+    "title": "Audit log in callTool + audit API with filters",
+    "app": "gateway",
+    "req": [
+      "T3",
+      "C2"
+    ],
+    "deps": [
+      "B12",
+      "B14"
+    ],
+    "est_h": 2,
+    "labels": [],
+    "acceptance": [
+      "Every call writes user, server, tool, timestamp, duration, outcome",
+      "Members see own rows, admins see all",
+      "No raw arguments or results stored"
+    ]
+  },
+  {
+    "key": "B16",
+    "title": "Upstreams 2 and 3: server-everything in cluster + GitLab MCP (fallback: public no-auth server)",
+    "app": "infra",
+    "req": [
+      "G6",
+      "D4",
+      "D7"
+    ],
+    "deps": [
+      "B12"
+    ],
+    "est_h": 2.5,
+    "labels": [
+      "gate::infra"
+    ],
+    "acceptance": [
+      "Three upstreams listed and healthy",
+      "Decision on GitLab MCP auth recorded in an ADR",
+      "Deleting the server-everything pod shows it down while others work"
+    ]
+  },
+  {
+    "key": "B17",
+    "title": "Dashboard: login, upstreams (status, tools), members, my keys, audit pages",
+    "app": "dashboard",
+    "req": [
+      "G1",
+      "T1",
+      "T2",
+      "T3"
+    ],
+    "deps": [
+      "B14",
+      "B15"
+    ],
+    "est_h": 5,
+    "labels": [],
+    "acceptance": [
+      "Admin and member see role-appropriate pages",
+      "Upstream status refreshes every 15 s",
+      "Credential values never appear in the browser (checked in network tab)"
+    ]
+  },
+  {
+    "key": "B18",
+    "title": "Dashboard chat agent: Claude tool loop via callTool, shows tools used",
+    "app": "gateway",
+    "req": [
+      "C1",
+      "C2",
+      "C3"
+    ],
+    "deps": [
+      "B15",
+      "B17"
+    ],
+    "est_h": 4,
+    "labels": [],
+    "acceptance": [
+      "Chat creates a product and lists today's orders",
+      "Each tool call shown in the UI and audited under the session user",
+      "Claude key only in a Secret, never sent to the browser"
+    ]
+  },
+  {
+    "key": "B19",
+    "title": "E2E scripts D1–D8 (tests/e2e/run.sh)",
+    "app": "infra",
+    "req": [
+      "D1",
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D6",
+      "D7",
+      "D8"
+    ],
+    "deps": [
+      "B09",
+      "B13",
+      "B16",
+      "B18"
+    ],
+    "est_h": 4,
+    "labels": [],
+    "acceptance": [
+      "./tests/e2e/run.sh all prints PASS for D1–D8 twice in a row"
+    ]
+  },
+  {
+    "key": "B20",
+    "title": "CHECKPOINT: D1–D8 pass on a fresh cluster",
+    "app": "infra",
+    "req": [
+      "D1",
+      "D2",
+      "D3",
+      "D4",
+      "D5",
+      "D6",
+      "D7",
+      "D8"
+    ],
+    "deps": [
+      "B19"
+    ],
+    "est_h": 1,
+    "labels": [
+      "checkpoint",
+      "priority::high"
+    ],
+    "acceptance": [
+      "cluster-up + helm install + run.sh all from scratch passes",
+      "Aadi reruns it and confirms"
+    ]
+  },
+  {
+    "key": "B21",
+    "title": "Pipeline: build images to GitLab registry, Helm package, Secret Detection, SAST, IaC, container scans",
+    "app": "release",
+    "req": [
+      "hackathon"
+    ],
+    "deps": [
+      "B20"
+    ],
+    "est_h": 3,
+    "labels": [],
+    "acceptance": [
+      "Main pipeline pushes tagged images and a versioned chart",
+      "All scan jobs run and report",
+      "Pipeline history visible on the public project"
+    ]
+  },
+  {
+    "key": "B22",
+    "title": "Canary deploy of the gateway + verdict.py (business health through the gateway)",
+    "app": "release",
+    "req": [
+      "hackathon"
+    ],
+    "deps": [
+      "B21"
+    ],
+    "est_h": 4,
+    "labels": [],
+    "acceptance": [
+      "Canary receives a slice of traffic",
+      "verdict.py outputs PROMOTE/ROLLBACK/HOLD from error rate, latency and woo__list_orders success",
+      "A forced bad release rolls back automatically"
+    ]
+  },
+  {
+    "key": "B23",
+    "title": "Duo flows: Verdict, Incident (opens regression issue), risk gate (Human Input)",
+    "app": "release",
+    "req": [
+      "hackathon"
+    ],
+    "deps": [
+      "B22"
+    ],
+    "est_h": 4,
+    "labels": [],
+    "acceptance": [
+      "One forced rollback in pipeline history creates an incident + priority::high regression issue",
+      "An auth/gateway MR pauses for human approval before promote",
+      "Flow YAML committed in .gitlab/flows/"
+    ]
+  },
+  {
+    "key": "B24",
+    "title": "VPS values + deploy with the same chart",
+    "app": "infra",
+    "req": [
+      "K2"
+    ],
+    "deps": [
+      "B20"
+    ],
+    "est_h": 3,
+    "labels": [
+      "optional",
+      "gate::infra"
+    ],
+    "acceptance": [
+      "helm install with values-prod.yaml on the VPS",
+      "Public URL live"
+    ]
+  },
+  {
+    "key": "B25",
+    "title": "Docs: DESIGN.md, THREAT_MODEL.md, README with setup and local-to-VPS story",
+    "app": "docs",
+    "req": [
+      "W4",
+      "G3",
+      "K2"
+    ],
+    "deps": [
+      "B19"
+    ],
+    "est_h": 3,
+    "labels": [],
+    "acceptance": [
+      "README gets a new machine from zero to D1–D8",
+      "Threat model covers SSRF, malicious tool descriptions, compromised upstream, key leak",
+      "Design note explains store connectivity choice (W4) and naming scheme (G3)"
+    ]
+  }
+]
