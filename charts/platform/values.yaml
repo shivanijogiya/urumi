@@ -1,0 +1,73 @@
+# Defaults for the urumi platform chart. values-local.yaml (k3d) and values-prod.yaml (VPS)
+# override these; both environments use the same templates.
+
+nameOverride: ''
+# Resource name prefix. Defaults to the release name, e.g. urumi-mariadb, urumi-wordpress.
+fullnameOverride: ''
+
+# Name of an EXISTING Secret that holds every credential. The chart only references it
+# (secretKeyRef) and never creates it, so no secret value ever lives in a values file.
+#   local: scripts/cluster-up.sh -> scripts/secrets-apply.sh creates it from .env.local
+#   prod:  create it out-of-band before installing, e.g.
+#          kubectl -n urumi create secret generic urumi-env --from-env-file=<your env file>
+secretName: urumi-env
+
+ingress:
+  # IngressClass for every Ingress in the chart. k3s ships Traefik.
+  className: traefik
+
+# Public storefront (WordPress + WooCommerce).
+store:
+  host: store.localtest.me
+  # Base URL WordPress uses for WP_HOME / WP_SITEURL. Empty = http(s)://<host>
+  # (https when tls.enabled).
+  url: ''
+  tls:
+    enabled: false
+    # TLS Secret for the host (e.g. issued by cert-manager); not created by this chart.
+    secretName: ''
+
+mariadb:
+  enabled: true
+  image:
+    repository: mariadb
+    tag: '11.4'
+    pullPolicy: IfNotPresent
+  database: wordpress
+  user: wordpress
+  # Keys inside `secretName`.
+  secretKeys:
+    password: MARIADB_PASSWORD
+    rootPassword: MARIADB_ROOT_PASSWORD
+  persistence:
+    size: 2Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+wordpress:
+  enabled: true
+  image:
+    repository: wordpress
+    tag: 6-php8.3-apache
+    pullPolicy: IfNotPresent
+  # DB host:port. Empty = the chart's MariaDB Service on 3306.
+  databaseHost: ''
+  persistence:
+    # Holds the whole docroot (/var/www/html): WordPress core, wp-config.php and wp-content.
+    size: 2Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi

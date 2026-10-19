@@ -1,0 +1,28 @@
+# VPS / production. Replace the placeholder host before installing.
+# The Secret `secretName` must already exist in the namespace (created out-of-band; see values.yaml).
+#   helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-prod.yaml --wait
+
+secretName: urumi-env
+
+ingress:
+  className: traefik
+
+store:
+  host: store.example.com
+  url: ''
+  # Enable once a certificate exists for the host (e.g. cert-manager issuing into secretName);
+  # store.url then defaults to https://<host>.
+  tls:
+    enabled: false
+    secretName: store-tls
+
+mariadb:
+  persistence:
+    size: 5Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+
+wordpress:
+  persistence:
+    size: 5Gi
+    storageClass: ''
