@@ -13,33 +13,52 @@
 #   release:preflight reports what is missing and fails tag pipelines.
 # - Only the GitLab-provided predefined registry credentials are used; no project secrets.
 
+include:
+  - template: Jobs/Container-Scanning.gitlab-ci.yml
+
 .release:conditions:
-  - &release-if-mr $CI_PIPELINE_SOURCE == "merge_request_event"
-  - &release-if-default-branch $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null
-  - &release-if-tag $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$/
+  rules:
+    - if: &release-if-mr $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: &release-if-default-branch $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null
+    - if: &release-if-tag $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$/
 
 .release:snippets:
-  # Refuse to push unless GitLab says this ref is protected (backs up the job rules).
-  - &release-require-protected |
-    if [ "$CI_COMMIT_REF_PROTECTED" != "true" ] || [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
-      echo "Refusing to publish: '$CI_COMMIT_REF_NAME' is not a protected branch/tag pipeline." >&2
-      exit 1
-    fi
-  # Defines release_build: rootless BuildKit build of apps/$RELEASE_APP with OCI labels.
-  - &release-buildctl |
-    release_build() {
-      buildctl-daemonless.sh build \
-        --frontend dockerfile.v0 \
-        --local context="$RELEASE_BUILD_CONTEXT" \
-        --local dockerfile="apps/$RELEASE_APP" \
-        --opt filename=Dockerfile \
-        --opt label:org.opencontainers.image.title="$RELEASE_APP" \
-        --opt label:org.opencontainers.image.source="$CI_PROJECT_URL" \
-        --opt label:org.opencontainers.image.revision="$CI_COMMIT_SHA" \
-        --opt label:org.opencontainers.image.created="$CI_COMMIT_TIMESTAMP" \
-        --opt label:org.opencontainers.image.version="${CI_COMMIT_TAG:-$CI_COMMIT_SHA}" \
-        "$@"
-    }
+  script:
+    # Refuse to push unless GitLab says this ref is protected (backs up the job rules).
+    - &release-require-protected |
+      if [ "$CI_COMMIT_REF_PROTECTED" != "true" ] || [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+        echo "Refusing to publish: '$CI_COMMIT_REF_NAME' is not a protected branch/tag pipeline." >&2
+        exit 1
+      fi
+    # Defines release_build: rootless BuildKit build of apps/$RELEASE_APP with OCI labels.
+    - &release-buildctl |
+      release_build() {
+        buildctl-daemonless.sh build \
+          --frontend dockerfile.v0 \
+          --local context="$RELEASE_BUILD_CONTEXT" \
+          --local dockerfile="apps/$RELEASE_APP" \
+          --opt filename=Dockerfile \
+          --opt label:org.opencontainers.image.title="$RELEASE_APP" \
+          --opt label:org.opencontainers.image.source="$CI_PROJECT_URL" \
+          --opt label:org.opencontainers.image.revision="$CI_COMMIT_SHA" \
+          --opt label:org.opencontainers.image.created="$CI_COMMIT_TIMESTAMP" \
+          --opt label:org.opencontainers.image.version="${CI_COMMIT_TAG:-$CI_COMMIT_SHA}" \
+          "$@"
+      }
+
+# Secret Detection, SAST and IaC are owned by #2. Keep Container Scanning here
+# because it must run after this include publishes each protected-ref image.
+container_scanning:
+  rules:
+    - when: never
+
+.release:container-scan:
+  extends: container_scanning
+  stage: test
+  allow_failure: false
+  variables:
+    CS_REGISTRY_USER: "$CI_REGISTRY_USER"
+    CS_REGISTRY_PASSWORD: "$CI_REGISTRY_PASSWORD"
 
 # ---------------------------------------------------------------------------
 # Images: $CI_REGISTRY_IMAGE/<app>:<full commit sha> (+ :<X.Y.Z> on release tags)
@@ -60,7 +79,11 @@
   interruptible: true
   script:
     - *release-buildctl
-    - release_build
+    - mkdir -p dist
+    - release_build --output "type=oci,dest=dist/$RELEASE_APP-$CI_COMMIT_SHA.tar"
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
 
 .release:image:publish:
   extends: .release:image
@@ -121,6 +144,36 @@ release:image:build:dashboard:
 release:image:publish:dashboard:
   extends: .release:image:publish
   variables: { RELEASE_APP: dashboard }
+  rules:
+    - if: *release-if-tag
+      exists: [apps/dashboard/Dockerfile]
+    - if: *release-if-default-branch
+      exists: [apps/dashboard/Dockerfile]
+
+release:container-scanning:woo-mcp:
+  extends: .release:container-scan
+  variables: { CS_IMAGE: "$CI_REGISTRY_IMAGE/woo-mcp:$CI_COMMIT_SHA" }
+  needs: [{ job: release:image:publish:woo-mcp, artifacts: false }]
+  rules:
+    - if: *release-if-tag
+      exists: [apps/woo-mcp/Dockerfile]
+    - if: *release-if-default-branch
+      exists: [apps/woo-mcp/Dockerfile]
+
+release:container-scanning:gateway:
+  extends: .release:container-scan
+  variables: { CS_IMAGE: "$CI_REGISTRY_IMAGE/gateway:$CI_COMMIT_SHA" }
+  needs: [{ job: release:image:publish:gateway, artifacts: false }]
+  rules:
+    - if: *release-if-tag
+      exists: [apps/gateway/Dockerfile]
+    - if: *release-if-default-branch
+      exists: [apps/gateway/Dockerfile]
+
+release:container-scanning:dashboard:
+  extends: .release:container-scan
+  variables: { CS_IMAGE: "$CI_REGISTRY_IMAGE/dashboard:$CI_COMMIT_SHA" }
+  needs: [{ job: release:image:publish:dashboard, artifacts: false }]
   rules:
     - if: *release-if-tag
       exists: [apps/dashboard/Dockerfile]

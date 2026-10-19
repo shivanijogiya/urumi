@@ -26,6 +26,7 @@ instructions instead of guessing.
 | `release:preflight` | build | report | report | **fails** if inputs missing or tag unprotected/invalid |
 | `release:image:build:<app>` | build | build only, no push | – | – |
 | `release:image:publish:<app>` | build | – | push | push |
+| `release:container-scanning:<app>` | test | – | scan pushed image | scan pushed image |
 | `release:chart:package` | build | lint + package (artifact) | – | – |
 | `release:chart:publish` | deploy | – | lint, package, push | lint, package, push |
 
@@ -39,6 +40,9 @@ instructions instead of guessing.
 - Images carry OCI labels (`source`, `revision`, `created`=commit time, `version`, `title`)
   and a minimal BuildKit provenance attestation.
 - Only predefined `CI_REGISTRY*` variables are used. No new secrets.
+- The official GitLab Container Scanning template is included here, with one job per app image.
+  Each scan needs the matching protected-ref publish job and uses the GitLab registry credentials;
+  the template's default single-image job is disabled to prevent duplicate scans.
 
 ## Dormant until inputs exist
 
@@ -69,14 +73,18 @@ include:
 ```
 
 Constraints for the root file:
-- `stages` (if declared) must include `build`, `test`, `deploy` in that order.
+- `stages` (if declared) must include `build`, `test`, `deploy` in that order. Existing
+  `lint` and `secure` stages can remain between `build` and `deploy` (e.g. `build`, `lint`,
+  `test`, `secure`, `deploy`).
 - `workflow:rules` must allow MR pipelines, default-branch pipelines and tag pipelines.
-- Container scanning (owned by #2) should scan `$CI_REGISTRY_IMAGE/<app>:$CI_COMMIT_SHA`
-  in the `test` stage on default-branch/tag pipelines. Those images exist after the `build` stage.
-  `release:chart:publish` runs in `deploy`, so it waits for the scanners.
+- Secret Detection, SAST and IaC scanning remain owned by #2. This include runs GitLab
+  Container Scanning for `$CI_REGISTRY_IMAGE/<app>:$CI_COMMIT_SHA` in `test` on protected
+  default-branch/tag pipelines. Those images are published in `build`; chart publish runs
+  in `deploy`, so it waits for the scanners.
 
-This file defines no scanner jobs, no `stages`, `workflow`, `default`, `include` or global
-`variables`, so it cannot duplicate or override #2.
+This file defines no `stages`, `workflow`, `default` or global `variables`. Its only external
+include is the official GitLab Container Scanning template; it does not duplicate the
+Secret Detection, SAST or IaC jobs in #2.
 
 ## Checks
 

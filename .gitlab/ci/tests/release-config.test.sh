@@ -47,29 +47,31 @@ fi
 JQ_LIB='
 def resolved($n): . as $root
   | ([$root[$n].extends // []] | flatten | map(. as $p | $root | resolved($p)) | add // {}) * ($root[$n] | del(.extends));
-def jobs: [keys[] | select(startswith(".") | not)];
+def jobs: [keys[] | select(startswith(".") | not) | select(. != "include" and . != "container_scanning")];
 def job($n): resolved($n);
 def ifs($n): [job($n).rules[] | select((.when // "on_success") != "never") | .if // "<always>"];
 def scripts($n): [job($n) | (.before_script // []), (.script // [])] | flatten | join("\n");
 '
 
+check "hidden GitLab templates are mappings" '[to_entries[] | select(.key | startswith(".")) | select(.value | type != "object")] == []'
+
 APPS="woo-mcp gateway dashboard"
-EXPECTED='["release:preflight","release:chart:package","release:chart:publish"'
+EXPECTED='["release:preflight","release:chart:package","release:chart:publish","release:container-scanning:woo-mcp","release:container-scanning:gateway","release:container-scanning:dashboard"'
 for a in $APPS; do EXPECTED="$EXPECTED,\"release:image:build:$a\",\"release:image:publish:$a\""; done
 EXPECTED="$EXPECTED]"
 
 # --- 2. Shape / integration with #2 ---------------------------------------
 check "expected release jobs exist" "($EXPECTED - jobs) == []"
-check "only release-namespaced keys at top level (no stages/workflow/include/default/variables)" \
-  '[keys[] | select((startswith(".release") or startswith("release:")) | not)] == []'
+check "only release-namespaced keys plus scanner include at top level" \
+  '[keys[] | select((startswith(".release") or startswith("release:") or . == "include" or . == "container_scanning") | not)] == []'
 check "jobs use GitLab default stages only (build/test/deploy)" \
   '[jobs[] as $j | job($j).stage | select(. != "build" and . != "test" and . != "deploy")] == []'
-check "no scanner jobs (owned by #2)" \
-  '[jobs[] | select(test("secret|sast|iac|container_scanning|dependency"; "i"))] == []'
+check "Secret Detection, SAST and IaC scanners remain owned by #2" \
+  '[jobs[] | select(test("secret|sast|iac|dependency"; "i"))] == []'
 
 # --- 3. Images: pinned, no dind/privileged ---------------------------------
-check "every job has a pinned image (explicit version, never latest)" \
-  '[jobs[] as $j | (job($j).image | if type == "object" then .name else . end) // "<none>"
+check "every build/package job has a pinned image (explicit version, never latest)" \
+  '[jobs[] as $j | select(($j | startswith("release:container-scanning:")) | not) | (job($j).image | if type == "object" then .name else . end) // "<none>"
     | select(test(":(v?[0-9]+\\.[0-9]+[0-9A-Za-z.\\-]*)(@sha256:[0-9a-f]{64})?$") | not)] == []'
 check "no latest tag anywhere in images" \
   '[jobs[] as $j | job($j).image | tostring | select(test("latest"))] == []'
@@ -93,6 +95,8 @@ check "build jobs run only on merge request pipelines" \
    ([build_jobs[] as $j | ifs($j)[] | select(startswith("$CI_PIPELINE_SOURCE == \"merge_request_event\"") | not)] == [])'
 check "build jobs never push or log in" \
   '[build_jobs[] as $j | scripts($j) | select(test("push=true|helm push|registry login|CI_REGISTRY_PASSWORD"))] == []'
+check "MR image builds export an OCI artifact instead of silently dropping output" \
+  'scripts("release:image:build:gateway") | contains("type=oci,dest=dist/$RELEASE_APP-") and contains("CI_COMMIT_SHA.tar")'
 check "publish scripts re-check protected ref before pushing (defence in depth)" \
   '[publish_jobs[] as $j | scripts($j) | select(contains("CI_COMMIT_REF_PROTECTED") | not)] == []'
 
@@ -115,7 +119,20 @@ check "chart publish runs after image publish and #2 scanners (deploy stage, no 
 check "publish jobs are not interruptible (no half-pushed releases)" \
   '[publish_jobs[] as $j | job($j).interruptible | select(. == true)] == []'
 
-# --- 6. Registry conventions + secret hygiene (raw text) ---------------------
+# --- 6. Container scanning --------------------------------------------------
+check "GitLab Container Scanning template is included" \
+  '[.include[] | select(.template == "Jobs/Container-Scanning.gitlab-ci.yml")] | length == 1'
+check "default scanner job is disabled; per-app jobs are used" \
+  '.container_scanning.rules == [{"when":"never"}]'
+for a in $APPS; do
+  check "container scan for $a waits for protected image publication" \
+    "(job(\"release:container-scanning:$a\").stage == \"test\") and
+     (job(\"release:container-scanning:$a\").variables.CS_IMAGE == \"\$CI_REGISTRY_IMAGE/$a:\$CI_COMMIT_SHA\") and
+     ([job(\"release:container-scanning:$a\").needs[].job] == [\"release:image:publish:$a\"]) and
+     ([ifs(\"release:container-scanning:$a\")[] | select(contains(\"CI_COMMIT_REF_PROTECTED == \\\"true\\\"\"))] | length == 2)"
+done
+
+# --- 7. Registry conventions + secret hygiene (raw text) ---------------------
 check "images pushed under \$CI_REGISTRY_IMAGE" \
   '[scripts("release:image:publish:gateway")] | .[0] | test("\\$CI_REGISTRY_IMAGE/")'
 check "chart pushed as OCI under \$CI_REGISTRY_IMAGE/charts" \
@@ -124,8 +141,8 @@ check "chart version comes from the tested helper" \
   'scripts("release:chart:publish") | test("chart-version.sh")'
 
 if grep -nE 'set -x|set -o xtrace' "$CI_FILE" >/dev/null; then bad "no shell tracing (would leak credentials)"; else ok "no shell tracing (would leak credentials)"; fi
-LEAKS="$(grep -nE 'CI_REGISTRY_PASSWORD|CI_JOB_TOKEN' "$CI_FILE" | grep -vE 'password-stdin|base64' || true)"
-if [ -z "$LEAKS" ]; then ok "registry credentials only piped to --password-stdin/base64"; else bad "registry credentials only piped to --password-stdin/base64" "$LEAKS"; fi
+LEAKS="$(grep -nE 'CI_REGISTRY_PASSWORD|CI_JOB_TOKEN' "$CI_FILE" | grep -vE 'password-stdin|base64|CS_REGISTRY_PASSWORD' || true)"
+if [ -z "$LEAKS" ]; then ok "registry credentials only used for BuildKit auth and scanner auth"; else bad "registry credentials only used for BuildKit auth and scanner auth" "$LEAKS"; fi
 if grep -nE '^[[:space:]]*-?[[:space:]]*(echo|printf)[^|]*\$\{?CI_REGISTRY_PASSWORD' "$CI_FILE" | grep -v '|' >/dev/null; then
   bad "credentials never echoed to job log"
 else
