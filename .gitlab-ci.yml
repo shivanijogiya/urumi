@@ -8,8 +8,8 @@ include:
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/SAST-IaC.gitlab-ci.yml
 
-# Run on merge requests, the default branch, and tags. A branch push with an
-# open MR is skipped so the MR pipeline is the only one.
+# Run on merge requests, the default branch, tags, and any branch push. A branch
+# push with an open MR is skipped so the MR pipeline is the only one.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -17,9 +17,10 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
 
 variables:
-  SAST_EXCLUDED_PATHS: 'node_modules, dist, coverage'
+  SAST_EXCLUDED_PATHS: 'node_modules, dist, coverage, .npm'
   # Let the security template jobs run in MR pipelines, not only branch pipelines.
   AST_ENABLE_MR_PIPELINES: 'true'
 
@@ -48,9 +49,12 @@ test:
 # Security scanners from the templates default to the `test` stage; run them after it.
 secret_detection:
   stage: secure
+  cache: []
 
 semgrep-sast:
   stage: secure
+  cache: []
 
 kics-iac-sast:
   stage: secure
+  cache: []

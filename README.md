@@ -24,7 +24,7 @@ docs/                Requirements, plan, design, threat model, ADRs
 
 ## Quick start
 
-Requires Node.js 22 or newer (`nvm use` picks up `.nvmrc`).
+Requires Node.js 22.13 or newer (`nvm use` picks up `.nvmrc`).
 
 ```sh
 npm install          # installs all workspaces
