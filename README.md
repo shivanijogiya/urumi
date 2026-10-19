@@ -69,6 +69,29 @@ scripts/cluster-down.sh --yes # delete the cluster (add --all to delete the regi
 - Scripts pin `kubectl` to the `k3d-urumi` context, so they never touch another cluster.
   `CLUSTER_NAME` overrides the name.
 
+### Store chart
+
+`charts/platform` is the one Helm chart. It currently runs the store: MariaDB (StatefulSet) and
+WordPress (official apache image), each on its own PVC, with WordPress behind a Traefik Ingress.
+
+```sh
+helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
+curl -sI http://store.localtest.me   # 302 to /wp-admin/install.php until WordPress is installed
+tests/infra/chart-checks.sh          # offline: probes + requests/limits on every container, no Secret rendered
+tests/infra/persistence.sh           # writes DB + wp-content markers, deletes both pods, checks they survive
+```
+
+- **Secrets:** the chart never creates a Secret. It reads `MARIADB_PASSWORD` and
+  `MARIADB_ROOT_PASSWORD` from the existing Secret named by `secretName` (default `urumi-env`).
+  Locally `cluster-up.sh` creates it; in prod create it out-of-band before installing.
+- **Data:** MariaDB keeps `/var/lib/mysql` on PVC `data-urumi-mariadb-0`; WordPress keeps its whole
+  docroot (core, `wp-config.php`, `wp-content`) on PVC `urumi-wordpress-wp-content`. Both PVCs
+  survive pod restarts and `helm uninstall`; delete them by hand to start fresh.
+- **Prod:** `values-prod.yaml` uses the same templates with a placeholder host
+  (`store.example.com`), the cluster's default StorageClass, and a TLS block that is off until a
+  certificate Secret exists.
+- Components are toggled with `mariadb.enabled` / `wordpress.enabled`.
+
 ## License
 
 [MIT](LICENSE)
