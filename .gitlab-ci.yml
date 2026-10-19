@@ -1,3 +1,56 @@
-hello:
+stages:
+  - lint
+  - test
+  - secure
+
+include:
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/SAST-IaC.gitlab-ci.yml
+
+# Run on merge requests, the default branch, and tags. A branch push with an
+# open MR is skipped so the MR pipeline is the only one.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+variables:
+  SAST_EXCLUDED_PATHS: 'node_modules, dist, coverage'
+  # Let the security template jobs run in MR pipelines, not only branch pipelines.
+  AST_ENABLE_MR_PIPELINES: 'true'
+
+default:
+  image: node:22-alpine
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+
+lint:
+  stage: lint
   script:
-    - echo ok
+    - npm ci --cache .npm --prefer-offline
+    - npm run lint
+    - npm run typecheck
+
+test:
+  stage: test
+  script:
+    - npm ci --cache .npm --prefer-offline
+    - npm test
+
+# Security scanners from the templates default to the `test` stage; run them after it.
+secret_detection:
+  stage: secure
+
+semgrep-sast:
+  stage: secure
+
+kics-iac-sast:
+  stage: secure

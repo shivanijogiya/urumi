@@ -1,0 +1,9 @@
+package-lock.json
+dist
+coverage
+docs/backlog.json
+
+# Hand-maintained agent/requirements docs; owned outside the code formatting pass.
+.claude/
+CLAUDE.md
+docs/ASSIGNMENT_ANALYSIS.md
