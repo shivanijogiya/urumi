@@ -102,7 +102,7 @@ Expected gate routing:
 
 ## 8. Open decisions for Aadi
 
-Sent as one DECIDE message on 20 Oct. Recorded here with my recommendation; the answer is written back as an ADR.
+Sent as one DECIDE message on 20 Oct. **All accepted** (ADR 000).
 
 | Q | Question | Recommendation |
 |---|---|---|
