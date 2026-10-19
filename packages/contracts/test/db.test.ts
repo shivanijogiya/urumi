@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MIGRATIONS_DIR, SLUG_RE } from '../src/index.js';
+import { MIGRATIONS_DIR } from '../src/db.js';
+import { SLUG_RE } from '../src/index.js';
 
 const sql = readFileSync(join(MIGRATIONS_DIR, '001_init.sql'), 'utf8');
 

@@ -30,8 +30,12 @@ encoded in `packages/contracts`.
 - **Tool names.** `{slug}__{tool}`. Slugs match `^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$`. They cannot
   contain `_`, so splitting on the first `__` is unambiguous. Tool characters outside
   `[a-zA-Z0-9_-]` become `_`. If a name is over 64 chars, the tool part is truncated and suffixed with
-  `_` + 6 hex chars of sha256(original). The gateway maps qualified → original names and never
-  reverses sanitization.
+  `_` + 8 hex chars of FNV-1a 32-bit over the original's UTF-8 bytes. FNV-1a is pure TS, so the
+  index stays browser-safe; it only needs to separate tools within one server, not resist attackers.
+  The gateway maps qualified → original names and never reverses sanitization.
+- **Browser-safe index.** `@urumi/contracts` imports nothing from `node:*`, so the dashboard can
+  bundle it. The Node-only `MIGRATIONS_DIR` lives at `@urumi/contracts/db`. Row types are exported
+  from both entry points as types only.
 - **Errors.** Every error is `{ error: { code, message, requestId? } }`, with a fixed code → HTTP status
   table. Messages never contain URLs, credentials, or raw upstream text.
 - **Upstream credentials.** Credentials are bearer or a custom header. Header names must be RFC 7230

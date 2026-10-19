@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_QUALIFIED_LEN, parseQualifiedName, qualifyToolName, SLUG_RE } from '../src/index.js';
+import {
+  fnv1a32,
+  MAX_QUALIFIED_LEN,
+  parseQualifiedName,
+  qualifyToolName,
+  SLUG_RE,
+} from '../src/index.js';
 
 const CLAUDE_TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -51,5 +57,22 @@ describe('qualifyToolName / parseQualifiedName', () => {
     expect(qualifyToolName(slug, long1)).toBe(q1);
     expect(qualifyToolName(slug, long2)).not.toBe(q1);
     expect(parseQualifiedName(q1)?.slug).toBe(slug);
+    expect(q1.endsWith(`_${fnv1a32(long1)}`)).toBe(true);
+  });
+});
+
+describe('fnv1a32', () => {
+  it.each([
+    ['', '811c9dc5'],
+    ['a', 'e40c292c'],
+    ['foobar', 'bf9cf968'],
+  ])('matches the reference vector for %j', (input, hex) => {
+    expect(fnv1a32(input)).toBe(hex);
+  });
+
+  it('hashes UTF-8 bytes, not UTF-16 code units', () => {
+    // A code-unit hash would treat 'é' as [0xc3, 0xa9]'s lookalike 'Ã©'; UTF-8 hashing does not.
+    expect(fnv1a32('é')).not.toBe(fnv1a32('Ã©'));
+    expect(fnv1a32('é')).toMatch(/^[0-9a-f]{8}$/);
   });
 });
