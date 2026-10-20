@@ -7,12 +7,14 @@ stages:
   - build
   - secure
   - release
+  - deploy
 
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/SAST-IaC.gitlab-ci.yml
   - local: .gitlab/ci/release.gitlab-ci.yml
+  - local: .gitlab/ci/canary.gitlab-ci.yml
 
 # Run on merge requests, the default branch, tags, and any branch push. A branch
 # push with an open MR is skipped so the MR pipeline is the only one.
