@@ -92,6 +92,37 @@ tests/infra/persistence.sh           # writes DB + wp-content markers, deletes b
   certificate Secret exists.
 - Components are toggled with `mariadb.enabled` / `wordpress.enabled`.
 
+### Store bootstrap
+
+A Helm `post-install,post-upgrade` hook Job (`urumi-bootstrap`, toggle `bootstrap.enabled`) makes
+the store usable with no clicks: it installs WordPress, installs WooCommerce (pinned:
+`bootstrap.woocommerce.version`), sets INR / Asia/Kolkata / pretty permalinks, enables free
+shipping + Cash on delivery, turns off "coming soon", seeds a `Demo Tee` product, and creates the
+`woo-mcp` user (role `shop_manager`) with an Application Password. The password lives **only** in
+the Secret `urumi-woo-api` (`WOO_URL`, `WOO_USER`, `WOO_APP_PASSWORD`), which the Job writes and
+then checks with `GET /wp-json/wc/v3/orders` (must be 200). Re-runs are idempotent and keep a
+password that still works.
+
+```sh
+kubectl -n urumi logs job/urumi-bootstrap --all-containers   # last run (kept for 1 h)
+tests/infra/store-bootstrap.sh   # Secret, REST 200/401, COD, D1 checkout, no secret in logs, re-run
+```
+
+- **Why the REST API + Application Password (W4):** it is WooCommerce's supported, versioned
+  interface, so its validation, hooks and emails run and the woo-mcp server needs nothing but
+  HTTP. WP-CLI needs a shell in the WordPress pod (fine for this one-off Job, not for a
+  service), and writing the DB directly skips WooCommerce's logic and breaks with schema changes
+  (e.g. HPOS order tables). The Application Password is scoped to one least-privilege user and
+  can be revoked without touching the admin login.
+- **HTTPS:** WordPress accepts Application Passwords only over HTTPS unless
+  `WP_ENVIRONMENT_TYPE` is `local` (`bootstrap.environmentType`: `local` locally, `production`
+  in prod). In prod, in-cluster plain-HTTP calls to `WOO_URL` must send
+  `X-Forwarded-Proto: https` (the Job does).
+- **RBAC:** the Job's ServiceAccount may `get/patch/update` only `urumi-woo-api`, plus `create`
+  Secrets in the namespace (Kubernetes cannot scope `create` by name). Only the Job's kubectl
+  container gets an API token.
+- **Prod:** the Job downloads WooCommerce from wordpress.org, so the cluster needs egress to it.
+
 ## License
 
 [MIT](LICENSE)
