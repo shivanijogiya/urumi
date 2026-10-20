@@ -16,7 +16,7 @@ RUN npm run build -w @urumi/woo-mcp
 FROM node:22-alpine
 ENV NODE_ENV=production
 WORKDIR /app
-COPY --from=build --chown=node:node /app/apps/woo-mcp/dist/main.js dist/main.js
+COPY --from=build --chown=node:node /app/apps/woo-mcp/dist/main.mjs dist/main.mjs
 USER node
 EXPOSE 8080
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/main.mjs"]

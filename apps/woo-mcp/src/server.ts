@@ -14,6 +14,7 @@ import { registerTools, type ToolDefinition } from './tools/index.js';
 import type { WooClient } from './woo-client.js';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
+const LINGER_MS = 2000;
 const SERVER_INFO = { name: 'urumi-woo-mcp', version: '0.0.0' };
 
 export interface AppDeps {
@@ -23,8 +24,6 @@ export interface AppDeps {
   /** Receives one JSON line per request. Defaults to stdout. */
   log?: (line: string) => void;
 }
-
-class BodyTooLarge extends Error {}
 
 function sha256(value: string) {
   return createHash('sha256').update(value).digest();
@@ -39,16 +38,62 @@ function sendError(res: ServerResponse, code: ErrorCode, message: string, status
   sendJson(res, status ?? httpStatusFor(code), makeError(code, message));
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
-  if (Number(req.headers['content-length']) > MAX_BODY_BYTES) throw new BodyTooLarge();
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new BodyTooLarge();
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString('utf8');
+/**
+ * Answers 413 and closes the connection. Closing while the client is still uploading makes it see
+ * EPIPE/reset instead of the 413, so the full response is written at once but ended only when the
+ * upload stops (or after LINGER_MS), like nginx's lingering close. The request is destroyed only
+ * after the response has finished.
+ */
+function rejectTooLarge(req: IncomingMessage, res: ServerResponse) {
+  const body = JSON.stringify(makeError('VALIDATION_FAILED', 'Request body too large'));
+  res.writeHead(413, {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(body),
+    connection: 'close',
+  });
+  res.write(body);
+  const end = () => {
+    clearTimeout(timer);
+    if (!res.writableEnded) res.end();
+  };
+  const timer = setTimeout(end, LINGER_MS);
+  res.once('finish', () => req.destroy());
+  req.once('end', end);
+  req.once('error', end);
+  req.resume(); // discard the rest of the upload while lingering
+}
+
+/** Reads the body up to MAX_BODY_BYTES. Resolves `undefined` after answering 413 itself. */
+function readBody(req: IncomingMessage, res: ServerResponse): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    if (Number(req.headers['content-length']) > MAX_BODY_BYTES) {
+      rejectTooLarge(req, res);
+      return resolve(undefined);
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return; // keep draining so the socket stays readable until we close it
+      size += chunk.length;
+      if (size <= MAX_BODY_BYTES) return void chunks.push(chunk);
+      tooLarge = true;
+      chunks.length = 0;
+      rejectTooLarge(req, res);
+      resolve(undefined);
+    });
+    req.on('end', () => {
+      if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', reject);
+  });
+}
+
+/** Path of the request target without URL parsing, which throws on targets like `//[`. */
+function pathOf(target: string | undefined) {
+  const raw = target ?? '/';
+  const end = raw.search(/[?#]/);
+  return (end === -1 ? raw : raw.slice(0, end)).slice(0, 256);
 }
 
 export function createApp(config: Config, deps: AppDeps): Server {
@@ -62,15 +107,8 @@ export function createApp(config: Config, deps: AppDeps): Server {
   }
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse) {
-    let raw: string;
-    try {
-      raw = await readBody(req);
-    } catch (e) {
-      if (!(e instanceof BodyTooLarge)) throw e;
-      sendError(res, 'VALIDATION_FAILED', 'Request body too large', 413);
-      req.resume();
-      return;
-    }
+    const raw = await readBody(req, res);
+    if (raw === undefined) return;
     let body: unknown;
     try {
       body = JSON.parse(raw);
@@ -113,23 +151,29 @@ export function createApp(config: Config, deps: AppDeps): Server {
   }
 
   const server = createServer((req, res) => {
-    const started = performance.now();
-    // Path only: query strings, headers, and bodies never reach the log.
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    res.once('close', () => {
-      log(
-        JSON.stringify({
-          method: req.method,
-          path,
-          status: res.statusCode,
-          durationMs: Math.round(performance.now() - started),
-        }),
-      );
-    });
-    route(req, res, path).catch(() => {
+    const fail = () => {
       if (!res.headersSent) sendError(res, 'INTERNAL', 'Internal error');
       else res.destroy();
-    });
+    };
+    // Nothing thrown here, sync or async, may escape and crash the process.
+    try {
+      const started = performance.now();
+      // Path only: query strings, headers, and bodies never reach the log.
+      const path = pathOf(req.url);
+      res.once('close', () => {
+        log(
+          JSON.stringify({
+            method: req.method,
+            path,
+            status: res.statusCode,
+            durationMs: Math.round(performance.now() - started),
+          }),
+        );
+      });
+      route(req, res, path).catch(fail);
+    } catch {
+      fail();
+    }
   });
   server.requestTimeout = 30_000;
   return server;

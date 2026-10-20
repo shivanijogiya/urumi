@@ -1,5 +1,5 @@
-import type { AddressInfo } from 'node:net';
-import type { Server } from 'node:http';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { request as httpRequest, type Server } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WOO_MCP_SECRET_HEADER } from '@urumi/contracts';
@@ -66,6 +66,66 @@ function post(base: string, body: unknown, headers: Record<string, string> = {})
     },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
+}
+
+/** Writes raw bytes to the server and resolves with the response status line. */
+function rawRequest(base: string, raw: string): Promise<string> {
+  const { hostname, port } = new URL(base);
+  return new Promise((resolve, reject) => {
+    const socket = netConnect(Number(port), hostname, () => socket.write(raw));
+    let data = '';
+    socket.on('data', (c) => {
+      data += c;
+      if (data.includes('\r\n')) {
+        socket.destroy();
+        resolve(data.slice(0, data.indexOf('\r\n')));
+      }
+    });
+    socket.on('error', reject);
+    socket.on('close', () => reject(new Error(`closed without a status line: ${data}`)));
+  });
+}
+
+/** POSTs `total` bytes with Transfer-Encoding: chunked, stopping once a response arrives. */
+function chunkedPost(base: string, total: number) {
+  const { hostname, port } = new URL(base);
+  return new Promise<{ status: number; headers: Record<string, unknown>; body: string }>(
+    (resolve, reject) => {
+      let responded = false;
+      const req = httpRequest({
+        host: hostname,
+        port,
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'transfer-encoding': 'chunked',
+          [WOO_MCP_SECRET_HEADER]: SECRET,
+        },
+      });
+      req.on('response', (res) => {
+        responded = true;
+        req.end(); // like a real client: stop uploading once the server has answered
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+      });
+      // The server may close the socket after answering; only fail if no response came.
+      req.on('error', (e) => {
+        if (!responded) reject(e);
+      });
+      const chunk = Buffer.alloc(64 * 1024, 'x');
+      let sent = 0;
+      const pump = () => {
+        while (sent < total && !responded) {
+          sent += chunk.length;
+          if (!req.write(chunk)) return void req.once('drain', pump);
+        }
+        if (!responded) req.end();
+      };
+      pump();
+    },
+  );
 }
 
 async function connect(base: string) {
@@ -137,6 +197,25 @@ describe('auth and routing', () => {
       [WOO_MCP_SECRET_HEADER]: SECRET,
     });
     expect(res.status).toBe(413);
+  });
+
+  it('answers a chunked upload over 1 MB with a 413 envelope, not a socket reset', async () => {
+    const base = await start();
+    const res = await chunkedPost(base, 2 * 1024 * 1024);
+    expect(res.status).toBe(413);
+    expect(res.headers.connection).toBe('close');
+    expect(JSON.parse(res.body)).toEqual({
+      error: { code: 'VALIDATION_FAILED', message: expect.any(String) },
+    });
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
+  });
+
+  it('survives a malformed request target and keeps serving', async () => {
+    const base = await start();
+    const statusLine = await rawRequest(base, 'GET //[ HTTP/1.1\r\nHost: x\r\n\r\n');
+    const status = Number(statusLine.split(' ')[1]);
+    expect([400, 404]).toContain(status);
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
   });
 
   it('answers malformed JSON with a JSON-RPC parse error', async () => {
