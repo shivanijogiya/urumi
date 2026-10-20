@@ -1,0 +1,77 @@
+# Local k3d cluster (scripts/cluster-up.sh).
+#   helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
+
+secretName: urumi-env
+
+ingress:
+  className: traefik
+
+store:
+  # *.localtest.me resolves to 127.0.0.1; k3d maps host port 80 to Traefik.
+  host: store.localtest.me
+  url: http://store.localtest.me
+  tls:
+    enabled: false
+
+app:
+  host: app.localtest.me
+  tls:
+    enabled: false
+
+dashboard:
+  enabled: true
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-dashboard
+    tag: dev
+    pullPolicy: Always
+
+mariadb:
+  persistence:
+    size: 2Gi
+    storageClass: local-path
+
+wordpress:
+  persistence:
+    size: 2Gi
+    storageClass: local-path
+
+bootstrap:
+  enabled: true
+  # Plain HTTP locally: Application Passwords need `local` (or HTTPS).
+  environmentType: local
+  storeTitle: Urumi Store (local)
+
+postgres:
+  persistence:
+    size: 1Gi
+    storageClass: local-path
+
+wooMcp:
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-woo-mcp
+    tag: dev
+    pullPolicy: Always
+  # bootstrap.environmentType is `local`: Application Passwords work over plain HTTP.
+  forwardedProto: ''
+  hostHeader: ''
+
+everything:
+  enabled: true
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-everything
+    tag: dev
+    pullPolicy: Always
+
+gateway:
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-gateway
+    tag: dev
+    # :dev is rebuilt in place; always pull the latest push.
+    pullPolicy: Always
+  publicOrigin: http://app.localtest.me
+  cookieSecure: false
+  chatModel: claude-sonnet-5-5

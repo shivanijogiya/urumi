@@ -1,0 +1,519 @@
+/* One stylesheet, no framework. Calm neutrals, one accent, status colours only where they mean something. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2026;
+  --muted: #5f6873;
+  --border: #dde1e6;
+  --accent: #2557d6;
+  --accent-text: #ffffff;
+  --danger: #b42318;
+  --ok: #157f3c;
+  --warn: #9a6700;
+  --radius: 6px;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.25rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.75rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
+}
+
+code,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  background: #f0f2f5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.6rem 1.5rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 0.25rem;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.topbar nav a,
+.account a {
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.topbar nav a:hover,
+.account a:hover {
+  background: var(--bg);
+}
+
+.topbar nav a.active {
+  background: #e8eefc;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--muted);
+}
+
+.role {
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+}
+
+.content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.page-loading {
+  padding: 2rem;
+  text-align: center;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* ── Text helpers ──────────────────────────────────────────────────────── */
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.success {
+  color: var(--ok);
+}
+
+.warning {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.description {
+  margin: 0.15rem 0 0;
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.offscreen {
+  position: fixed;
+  left: -9999px;
+}
+
+/* ── Cards and forms ───────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+
+.card.narrow {
+  max-width: 420px;
+}
+
+.card.inline,
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.notice {
+  border-color: #e6c66a;
+  background: #fffbeb;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field small {
+  color: var(--muted);
+}
+
+label.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.grid .wide {
+  grid-column: 1 / -1;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+input:disabled,
+select:disabled {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+button.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+button.danger {
+  background: var(--surface);
+  color: var(--danger);
+  border-color: #f0c5c0;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── Login ─────────────────────────────────────────────────────────────── */
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.login form {
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+/* ── Tables ────────────────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 1rem 0;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+td.actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+td.url {
+  word-break: break-all;
+  color: var(--muted);
+}
+
+tr.revoked td {
+  color: var(--muted);
+}
+
+/* ── Badges ────────────────────────────────────────────────────────────── */
+.badge,
+.tag {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  background: #eceff3;
+  color: var(--muted);
+}
+
+.tag {
+  margin-left: 0.4rem;
+}
+
+.badge-up,
+.badge-ok {
+  background: #dcf5e4;
+  color: var(--ok);
+}
+
+.badge-down,
+.badge-error,
+.badge-denied {
+  background: #fde4e1;
+  color: var(--danger);
+}
+
+.badge-timeout {
+  background: #fdf1d3;
+  color: var(--warn);
+}
+
+/* ── Tools, keys ───────────────────────────────────────────────────────── */
+.tool-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tool-list li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-list li:last-child {
+  border-bottom: 0;
+}
+
+.secret {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.secret code {
+  background: #f0f2f5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.55rem;
+  word-break: break-all;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(20 24 31 / 45%);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.dialog {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  box-shadow: 0 10px 40px rgb(0 0 0 / 20%);
+}
+
+/* ── Chat ──────────────────────────────────────────────────────────────── */
+.chat-log {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.turn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  max-width: 85%;
+}
+
+.turn.user {
+  align-self: flex-end;
+  background: #e8eefc;
+  border-color: #c9d6f7;
+}
+
+.turn.pending {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.who {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.turn .text {
+  white-space: pre-wrap;
+}
+
+.tools-used {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.tools-used .label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.tools-used ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+}
+
+.tools-used li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.composer {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.composer label {
+  flex: 1;
+}
+
+.composer textarea {
+  resize: vertical;
+}

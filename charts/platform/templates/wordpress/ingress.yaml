@@ -1,0 +1,28 @@
+{{- if .Values.wordpress.enabled }}
+{{- $ctx := dict "ctx" $ "component" "wordpress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.store.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.store.host | quote }}
+      secretName: {{ required "store.tls.secretName is required when store.tls.enabled" .Values.store.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.store.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "platform.componentName" $ctx }}
+                port:
+                  name: http
+{{- end }}

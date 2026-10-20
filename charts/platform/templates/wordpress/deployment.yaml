@@ -1,0 +1,74 @@
+{{- if .Values.wordpress.enabled }}
+{{- $ctx := dict "ctx" $ "component" "wordpress" }}
+{{- $v := .Values.wordpress }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  # The docroot is a ReadWriteOnce volume: the old pod must stop before the new one mounts it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wordpress
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          # The official apache image starts as root to bind port 80 and chown the docroot,
+          # then Apache drops to www-data, so runAsNonRoot is not possible with it.
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            {{- include "platform.wordpressEnv" . | nindent 12 }}
+          # A static core file: served before WordPress is installed, needs no DB, no redirect.
+          startupProbe:
+            httpGet:
+              path: /wp-includes/images/blank.gif
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            # First start copies WordPress core into the empty volume: up to 5 min.
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /wp-includes/images/blank.gif
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /wp-includes/images/blank.gif
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            # The whole docroot persists (core, wp-config.php, wp-content). The image only
+            # copies core into an empty volume, so later core updates happen through WordPress.
+            - name: docroot
+              mountPath: /var/www/html
+      volumes:
+        - name: docroot
+          persistentVolumeClaim:
+            claimName: {{ include "platform.componentName" $ctx }}-wp-content
+{{- end }}

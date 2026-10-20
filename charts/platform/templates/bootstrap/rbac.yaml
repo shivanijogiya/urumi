@@ -1,0 +1,54 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $ctx := dict "ctx" $ "component" "bootstrap" }}
+{{- $name := include "platform.componentName" $ctx }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+# No automatic token anywhere: the Job projects one into its kubectl container only.
+automountServiceAccountToken: false
+---
+# Namespace-scoped: the Job may only manage the one Secret it owns (and scale/restart woo-mcp).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.bootstrap.apiSecretName | quote }}]
+    verbs: ["get", "patch", "update"]
+  # `create` cannot be limited by resourceNames (the name is not known when the request is
+  # authorized), so this allows creating any Secret in this namespace. It cannot read, change
+  # or delete existing ones.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  {{- if .Values.wooMcp.enabled }}
+  # Start woo-mcp once its credentials exist (scale 0 -> 1) and restart it after a new
+  # Application Password. Only that one Deployment.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    resourceNames: [{{ include "platform.componentName" (dict "ctx" $ "component" "woo-mcp") | quote }}]
+    verbs: ["get", "patch", "update"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

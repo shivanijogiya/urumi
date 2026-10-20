@@ -1,0 +1,98 @@
+{{- if .Values.wooMcp.enabled }}
+{{- $ctx := dict "ctx" $ "component" "woo-mcp" }}
+{{- $v := .Values.wooMcp }}
+{{- $apiSecret := .Values.bootstrap.apiSecretName }}
+{{- /*
+The store credentials live in the Secret the post-install bootstrap hook writes. `helm install
+--wait` waits for every Deployment to be Ready BEFORE post-install hooks run, so a woo-mcp pod
+blocked on that Secret (missing secretKeyRef, init container, or failing readiness) would never
+become Ready and the hook would never create it: a deadlock. Instead, run 0 replicas while the
+Secret does not exist yet (fresh install); the bootstrap Job scales this Deployment to 1 once it
+has published the Secret, and every later upgrade finds the Secret and renders 1.
+`helm template`/`lint` have no cluster, so they render 0.
+*/}}
+{{- $haveCreds := lookup "v1" "Secret" .Release.Namespace $apiSecret }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ ternary 1 0 (not (empty $haveCreds)) }}
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # node user of the node:22-alpine image.
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: woo-mcp
+          image: "{{ $v.image.repository }}:{{ $v.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: WOO_MCP_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.secretKeys.sharedSecret }}
+            {{- range $name := list "WOO_URL" "WOO_USER" "WOO_APP_PASSWORD" }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $apiSecret }}
+                  key: {{ $name }}
+            {{- end }}
+            {{- with $v.forwardedProto }}
+            - name: WOO_FORWARDED_PROTO
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $v.hostHeader }}
+            - name: WOO_HOST_HEADER
+              value: {{ . | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read-only; give Node a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

@@ -1,0 +1,124 @@
+{{- if .Values.gateway.enabled }}
+{{- $ctx := dict "ctx" $ "component" "gateway" }}
+{{- $v := .Values.gateway }}
+{{- $pg := .Values.postgres }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # node user of the node:22-alpine image.
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ $v.image.repository }}:{{ $v.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PUBLIC_ORIGIN
+              value: {{ $v.publicOrigin | quote }}
+            - name: COOKIE_SECURE
+              value: {{ $v.cookieSecure | quote }}
+            # Migrations run on start; concurrent starts are serialised by an advisory lock.
+            - name: PGHOST
+              value: {{ include "platform.postgresHost" . | quote }}
+            - name: PGPORT
+              value: {{ $v.database.port | quote }}
+            - name: PGUSER
+              value: {{ $pg.user | quote }}
+            - name: PGDATABASE
+              value: {{ $pg.database | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $pg.secretKeys.password }}
+            {{- range $name, $key := $v.secretKeys }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secretName }}
+                  key: {{ $key }}
+            {{- end }}
+            # In-cluster upstreams (woo-mcp, everything) resolve to private IPs; allow-list them.
+            - name: UPSTREAM_ALLOWED_HOSTS
+              value: {{ .Values.gateway.upstreamAllowedHosts | default (printf "*.%s.svc.cluster.local" .Release.Namespace) | quote }}
+            # Chat agent (C3). Optional: without the key the gateway runs and /api/chat answers 503.
+            # Calls api.anthropic.com:443; no NetworkPolicy restricts gateway egress.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.chatSecretKey }}
+                  optional: true
+            - name: CHAT_MODEL
+              value: {{ $v.chatModel | quote }}
+            {{- if .Values.wooMcp.enabled }}
+            # The internal woo-mcp upstream (W3) and the header secret it requires.
+            - name: WOO_MCP_URL
+              value: {{ include "platform.wooMcpUrl" . | quote }}
+            - name: WOO_MCP_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ .Values.wooMcp.secretKeys.sharedSecret }}
+            {{- end }}
+          # Startup waits for Postgres (up to 2 min) and runs migrations before listening.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read-only; give Node a writable /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

@@ -1,0 +1,20 @@
+{
+  "name": "@urumi/woo-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/main.mjs \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "start": "node dist/main.mjs",
+    "test": "vitest run",
+    "test:cluster": "npm run test:cluster:products && npm run test:cluster:orders",
+    "test:cluster:products": "esbuild test/cluster/products.cluster.ts --bundle --platform=node --target=node22 --format=esm --log-level=warning --outfile=dist/products.cluster.mjs \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" && node dist/products.cluster.mjs",
+    "test:cluster:orders": "esbuild test/cluster/orders.cluster.ts --bundle --platform=node --target=node22 --format=esm --log-level=warning --outfile=dist/orders.cluster.mjs \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" && node dist/orders.cluster.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@urumi/contracts": "*",
+    "zod": "^4.6.7"
+  }
+}

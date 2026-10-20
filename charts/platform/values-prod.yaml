@@ -1,0 +1,84 @@
+# VPS / production. Replace the placeholder host before installing.
+# The Secret `secretName` must already exist in the namespace (created out-of-band; see values.yaml).
+#   helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-prod.yaml --wait
+
+secretName: urumi-env
+
+ingress:
+  className: traefik
+
+store:
+  host: store.example.com
+  url: ''
+  # Enable once a certificate exists for the host (e.g. cert-manager issuing into secretName);
+  # store.url then defaults to https://<host>.
+  tls:
+    enabled: false
+    secretName: store-tls
+
+app:
+  host: app.example.com
+  # Enable once a certificate exists for the host (gateway.publicOrigin is already https).
+  tls:
+    enabled: false
+    secretName: app-tls
+
+dashboard:
+  enabled: true
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/dashboard
+    tag: ''
+    pullPolicy: IfNotPresent
+
+mariadb:
+  persistence:
+    size: 5Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+
+wordpress:
+  persistence:
+    size: 5Gi
+    storageClass: ''
+
+bootstrap:
+  enabled: true
+  # Served over HTTPS; see values.yaml for in-cluster HTTP calls (X-Forwarded-Proto).
+  environmentType: production
+  storeTitle: Urumi Store
+  # The Job downloads WooCommerce from wordpress.org: the cluster needs egress to it.
+
+postgres:
+  persistence:
+    size: 5Gi
+    storageClass: ''
+
+wooMcp:
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/woo-mcp
+    tag: ''
+    pullPolicy: IfNotPresent
+  # environmentType is `production`: in-cluster HTTP calls must claim HTTPS.
+  forwardedProto: https
+  hostHeader: ''
+
+everything:
+  enabled: true
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/everything
+    tag: ''
+    pullPolicy: IfNotPresent
+
+gateway:
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/gateway
+    tag: ''
+    pullPolicy: IfNotPresent
+  # Replace with the dashboard's HTTPS origin.
+  publicOrigin: https://app.example.com
+  cookieSecure: true
+  chatModel: claude-sonnet-5-5

@@ -1,0 +1,94 @@
+{{- if .Values.postgres.enabled }}
+{{- $ctx := dict "ctx" $ "component" "postgres" }}
+{{- $v := .Values.postgres }}
+{{- $ready := list "pg_isready" "-h" "127.0.0.1" "-U" $v.user "-d" $v.database }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "platform.componentName" $ctx }}-headless
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # postgres user/group of the alpine image.
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ $v.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ $v.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.secretKeys.password }}
+            # A subdirectory: the volume root may contain lost+found, which initdb refuses.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # TCP (-h 127.0.0.1), not the socket: during first init the entrypoint runs a
+          # socket-only temporary server, which must not count as ready.
+          startupProbe:
+            exec:
+              command: {{ toJson $ready }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+            # initdb on a cold volume: up to 5 min.
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: {{ toJson $ready }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: {{ toJson $ready }}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "platform.selectorLabels" $ctx | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $v.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+{{- end }}

@@ -1,0 +1,5 @@
+# WP-CLI config for the bootstrap Job (WP_CLI_CONFIG_PATH).
+path: /var/www/html
+# Apache in the WordPress pod has mod_rewrite; lets `wp rewrite structure --hard` write .htaccess.
+apache_modules:
+  - mod_rewrite

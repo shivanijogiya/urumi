@@ -1,0 +1,12 @@
+package-lock.json
+dist
+coverage
+docs/backlog.json
+
+# Helm templates are Go templates, not YAML; `helm lint` checks them instead.
+charts/*/templates/
+
+# Hand-maintained agent/requirements docs; owned outside the code formatting pass.
+.claude/
+CLAUDE.md
+docs/ASSIGNMENT_ANALYSIS.md

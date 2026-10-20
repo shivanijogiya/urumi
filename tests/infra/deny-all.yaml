@@ -1,0 +1,11 @@
+# Default-deny ingress for every pod in the namespace. smoke-ingress.sh applies it and
+# expects the busybox client can no longer reach nginx, proving NetworkPolicy is enforced.
+# Egress (and so DNS) stays open, so a failure can only come from this policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

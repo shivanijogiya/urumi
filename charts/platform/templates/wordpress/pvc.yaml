@@ -1,0 +1,21 @@
+{{- if .Values.wordpress.enabled }}
+{{- $ctx := dict "ctx" $ "component" "wordpress" }}
+{{- $v := .Values.wordpress.persistence }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "platform.componentName" $ctx }}-wp-content
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+  annotations:
+    # Store content survives `helm uninstall` (like the MariaDB StatefulSet's PVC).
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $v.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $v.size }}
+{{- end }}
