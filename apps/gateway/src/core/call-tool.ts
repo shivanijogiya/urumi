@@ -77,6 +77,11 @@ const OUTCOME: Partial<Record<ErrorCode, Outcome>> = {
   VALIDATION_FAILED: 'denied',
 };
 
+/** The audit outcome of a call that failed with `code` (chat reports the same in toolCalls). */
+export function outcomeFor(code: ErrorCode): Outcome {
+  return OUTCOME[code] ?? 'error';
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -175,7 +180,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       return result;
     } catch (err) {
       record.errorCode = err instanceof HttpError ? err.code : 'INTERNAL';
-      record.outcome = OUTCOME[record.errorCode] ?? 'error';
+      record.outcome = outcomeFor(record.errorCode);
       throw err;
     } finally {
       record.durationMs = Date.now() - startedAt.getTime();

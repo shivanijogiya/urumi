@@ -1,6 +1,7 @@
 // Environment config, validated once at startup. Errors name the variable, never its value.
 import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { z } from 'zod';
+import { DEFAULT_CHAT_MODEL } from './chat/service.js';
 
 /** Optional string; an empty value counts as unset. */
 const optional = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
@@ -79,6 +80,15 @@ const EnvSchema = z.object({
         'must be comma-separated hostnames or *.suffix (suffix of two or more labels)',
       ),
   ),
+  // Chat agent (#19). Unset key: /api/chat answers 503, everything else runs.
+  ANTHROPIC_API_KEY: optional(),
+  CHAT_MODEL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .default(DEFAULT_CHAT_MODEL)
+      .refine((v) => /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,99}$/.test(v), 'must be a model id'),
+  ),
 });
 
 /** Needed unless DATABASE_URL is set. Checked outside zod so they are reported with other errors. */
@@ -103,6 +113,9 @@ export interface Config {
   trustProxy: boolean | number;
   /** Lowercase hostnames or `*.suffix`, no trailing dot. */
   upstreamAllowedHosts: string[];
+  /** ANTHROPIC_API_KEY, or null when chat is not configured. Never logged. */
+  anthropicApiKey: string | null;
+  chatModel: string;
 }
 
 export class ConfigError extends Error {
@@ -146,6 +159,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,
     upstreamAllowedHosts: e.UPSTREAM_ALLOWED_HOSTS,
+    anthropicApiKey: e.ANTHROPIC_API_KEY ?? null,
+    chatModel: e.CHAT_MODEL,
   };
 }
 

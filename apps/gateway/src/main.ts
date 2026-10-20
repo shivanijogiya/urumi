@@ -1,4 +1,5 @@
 // Gateway entry point: config -> wait for Postgres -> migrate -> seed admin -> listen -> health loop.
+import { createAnthropicClient } from './chat/anthropic.js';
 import { ConfigError, loadConfig } from './config.js';
 import { HealthMonitor } from './core/health.js';
 import { migrate } from './db/migrate.js';
@@ -31,7 +32,12 @@ async function main(): Promise<void> {
     trustProxy: config.trustProxy,
     encKey: config.encKey,
     upstreamAllowedHosts: config.upstreamAllowedHosts,
+    chat: {
+      anthropic: config.anthropicApiKey ? createAnthropicClient(config.anthropicApiKey) : null,
+      model: config.chatModel,
+    },
   });
+  if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
 
   const health = new HealthMonitor({ pool, registry: server.tools.registry, log: server.log });
 

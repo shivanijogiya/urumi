@@ -5,11 +5,16 @@ import { createAuditWriter } from './audit/hook.js';
 import { registerAuditRoutes } from './audit/routes.js';
 import { IP_MAX_FAILURES, LoginLimiter } from './auth/login-limiter.js';
 import { registerAuthRoutes } from './auth/routes.js';
+import type { AnthropicLike } from './chat/anthropic.js';
+import { ChatRateLimiter } from './chat/rate-limit.js';
+import { registerChatRoutes } from './chat/routes.js';
+import { createChatService } from './chat/service.js';
 import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
 import { ToolRegistry } from './core/registry.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
+import { registerMcpEndpoint } from './mcp/endpoint.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
@@ -53,6 +58,11 @@ export interface AppDeps {
   mcpTimeouts?: { listMs?: number; callMs?: number };
   /** Extra observer of every finished callTool, after its audit_log row is written. */
   onCallFinished?: (record: CallRecord) => void | Promise<void>;
+  /**
+   * Chat agent (#19). `anthropic` is null (or `chat` absent) when ANTHROPIC_API_KEY is unset:
+   * /api/chat then answers 503. Tests inject a scripted client.
+   */
+  chat?: { anthropic: AnthropicLike | null; model?: string };
 }
 
 /**
@@ -161,6 +171,19 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
   registerToolRoutes(app, registry);
   registerAuditRoutes(app);
+  registerMcpEndpoint(app, { registry, callTool });
+  const anthropic = deps.chat?.anthropic;
+  registerChatRoutes(app, {
+    service: anthropic
+      ? createChatService({
+          anthropic,
+          listTools: () => registry.listTools(),
+          callTool,
+          ...(deps.chat?.model ? { model: deps.chat.model } : {}),
+        })
+      : null,
+    limiter: new ChatRateLimiter(),
+  });
 
   return app;
 }
