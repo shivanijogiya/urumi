@@ -6,6 +6,7 @@ import { WOO_MCP_SECRET_HEADER, WOO_TOOLS } from '@urumi/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Config } from '../../src/config.js';
 import { createApp } from '../../src/server.js';
+import { ORDER_STATUSES } from '../../src/tools/order-summary.js';
 import { createWooClient, type FetchLike } from '../../src/woo-client.js';
 import { fakeFetch, json } from './helpers.js';
 
@@ -38,15 +39,59 @@ async function connect(fetchImpl: FetchLike = fakeFetch(() => json([]))) {
 }
 
 describe('tools/list contract', () => {
-  it('lists exactly list_products and create_product, all members of WOO_TOOLS', async () => {
+  it('lists exactly the five WOO_TOOLS, each with a one-sentence description', async () => {
     const client = await connect();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['create_product', 'list_products']);
-    for (const name of names) expect(WOO_TOOLS).toContain(name);
+    expect(names).toEqual([...WOO_TOOLS].sort());
     for (const tool of tools) {
       expect(tool.description).toMatch(/^[A-Z][^.]*\.$/); // one sentence
+      expect(tool.inputSchema.type).toBe('object');
     }
+    const listOrders = tools.find((t) => t.name === 'list_orders')!;
+    expect(listOrders.description).toContain('Asia/Kolkata');
+    await client.close();
+  });
+
+  it('publishes the list_orders input schema', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const schema = tools.find((t) => t.name === 'list_orders')!.inputSchema;
+    expect(schema.required ?? []).toEqual([]);
+    expect(schema.properties).toMatchObject({
+      date: { type: 'string', pattern: '^(today|\\d{4}-\\d{2}-\\d{2})$' },
+      after: { type: 'string', format: 'date-time' },
+      before: { type: 'string', format: 'date-time' },
+      status: { enum: [...ORDER_STATUSES, 'any'], default: 'any' },
+      page: { type: 'integer', minimum: 1, default: 1 },
+      per_page: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    });
+    expect(Object.keys(schema.properties!).sort()).toEqual([
+      'after',
+      'before',
+      'date',
+      'page',
+      'per_page',
+      'status',
+    ]);
+    await client.close();
+  });
+
+  it('publishes the get_order and update_order_status input schemas', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const get = tools.find((t) => t.name === 'get_order')!.inputSchema;
+    expect(get.required).toEqual(['id']);
+    expect(get.properties).toEqual({
+      id: expect.objectContaining({ type: 'integer', exclusiveMinimum: 0 }),
+    });
+    const update = tools.find((t) => t.name === 'update_order_status')!.inputSchema;
+    expect([...(update.required ?? [])].sort()).toEqual(['id', 'status']);
+    expect(update.properties).toMatchObject({
+      id: { type: 'integer', exclusiveMinimum: 0 },
+      status: { enum: ORDER_STATUSES.filter((s) => s !== 'checkout-draft') },
+    });
+    expect(Object.keys(update.properties!).sort()).toEqual(['id', 'status']);
     await client.close();
   });
 
@@ -115,6 +160,32 @@ describe('tools/call over HTTP', () => {
     });
     expect(badPrice.isError).toBe(true);
     expect(fetchImpl).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
+  it.each([
+    ['update_order_status', { id: 1, status: 'shipped' }],
+    ['list_orders', { date: 'today', after: '2026-10-20T00:00:00Z' }],
+    ['get_order', { id: 0 }],
+  ])(
+    'answers invalid %s arguments with the VALIDATION_FAILED envelope, never calling Woo',
+    async (name, args) => {
+      const fetchImpl = fakeFetch(() => json({}));
+      const client = await connect(fetchImpl);
+      const res = await client.callTool({ name, arguments: args });
+      expect(res.isError).toBe(true);
+      const [first] = res.content as { text: string }[];
+      expect(JSON.parse(first!.text)).toEqual({
+        error: { code: 'VALIDATION_FAILED', message: expect.any(String) },
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      await client.close();
+    },
+  );
+
+  it('answers an unknown tool with a JSON-RPC error', async () => {
+    const client = await connect();
+    await expect(client.callTool({ name: 'delete_everything', arguments: {} })).rejects.toThrow();
     await client.close();
   });
 });

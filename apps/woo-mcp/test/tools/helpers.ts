@@ -1,8 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { expect, vi } from 'vitest';
-import { z } from 'zod';
 import type { WooConfig } from '../../src/config.js';
-import { runTool, type ToolDefinition } from '../../src/tools/index.js';
+import { argsSchema, runTool, type ToolDefinition } from '../../src/tools/index.js';
 import { createWooClient, type FetchLike } from '../../src/woo-client.js';
 
 export const BASE = 'http://wordpress.internal:8081';
@@ -32,13 +31,14 @@ export function hangingFetch(): FetchMock {
   );
 }
 
+/** The full argument schema: the published shape plus the tool's cross-field refinements. */
 export function schemaOf(tool: ToolDefinition) {
-  return z.object(tool.inputSchema);
+  return argsSchema(tool);
 }
 
 /**
- * Runs a tool the way the MCP server does: the SDK parses the arguments with the tool's schema, then
- * `runTool` calls the handler and maps errors. Only fetch (the HTTP boundary) is fake.
+ * Runs a tool the way the MCP server does: `runTool` parses the raw arguments with the tool's
+ * schema, calls the handler, and maps errors. Only fetch (the HTTP boundary) is fake.
  */
 export async function call(
   tool: ToolDefinition,
@@ -47,7 +47,7 @@ export async function call(
   timeoutMs?: number,
 ): Promise<CallToolResult> {
   const woo = createWooClient(config, fetchImpl, timeoutMs);
-  return runTool(tool, schemaOf(tool).parse(args), woo);
+  return runTool(tool, args, woo);
 }
 
 export function textOf(result: CallToolResult): string {

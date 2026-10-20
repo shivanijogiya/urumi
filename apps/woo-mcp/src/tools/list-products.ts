@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineTool, jsonResult, parseUpstream } from './define.js';
+import { defineTool, jsonResult, parseUpstream, totalFrom } from './define.js';
 
 /** Fields kept from each WooCommerce product; zod drops the rest of the payload. */
 const ProductSummary = z.object({
@@ -12,11 +12,6 @@ const ProductSummary = z.object({
   stock_status: z.string(),
   permalink: z.string(),
 });
-
-function totalFrom(headers: Headers): number | undefined {
-  const raw = headers.get('x-wp-total')?.trim();
-  return raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
-}
 
 export const listProducts = defineTool({
   name: 'list_products',
