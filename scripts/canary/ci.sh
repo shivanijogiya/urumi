@@ -63,7 +63,12 @@ kc create namespace "$NAMESPACE" --dry-run=client -o yaml | kc apply -f -
 
 say "4/7 stable release + seed"
 helm --kube-context "$KUBE_CONTEXT" upgrade --install urumi "$CHART" -n "$NAMESPACE" \
-  -f "$CHART/values-local.yaml" -f "$ROOT/scripts/canary/values-ci.yaml" --wait --timeout 15m
+  -f "$CHART/values-local.yaml" -f "$ROOT/scripts/canary/values-ci.yaml" --wait --timeout 15m || {
+  # Shared runners are sometimes slow to pull/start the store; show why before failing.
+  kc -n "$NAMESPACE" get pods -o wide || true
+  kc -n "$NAMESPACE" get events --sort-by=.lastTimestamp | tail -30 || true
+  die "stable install did not become ready within 15m"
+}
 E2E_SKIP_GITLAB=1 "$ROOT/tests/e2e/run.sh" seed ||
   die "seed failed: $(cat "$ROOT/tests/e2e/.out/seed.log" 2>/dev/null | tail -20)"
 
