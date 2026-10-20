@@ -72,7 +72,7 @@ say "2/7 images"
 for c in gateway woo-mcp everything; do
   docker build -q -f "$ROOT/apps/$c/Dockerfile" -t "urumi-$c:ci" "$ROOT" >/dev/null
 done
-k3d image import urumi-gateway:ci urumi-woo-mcp:ci urumi-everything:ci -c "$CLUSTER_NAME"
+"$ROOT/scripts/canary/k3d-import.sh" "$CLUSTER_NAME" urumi-gateway:ci urumi-woo-mcp:ci urumi-everything:ci
 
 say "3/7 Secret urumi-env (generated)"
 [ -f "$ROOT/.env.local" ] || "$ROOT/scripts/gen-env.sh"
