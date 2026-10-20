@@ -125,3 +125,53 @@ bootstrap:
       limits:
         cpu: 500m
         memory: 256Mi
+
+# Gateway database (K3, K4). Only the gateway connects to it.
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  database: gateway
+  user: gateway
+  # Keys inside `secretName`.
+  secretKeys:
+    password: POSTGRES_PASSWORD
+  persistence:
+    size: 1Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# MCP gateway + admin API. Runs migrations and seeds the first admin on start.
+gateway:
+  enabled: true
+  image:
+    repository: registry.gitlab.com/<group>/<project>/gateway
+    # Empty = the chart's appVersion.
+    tag: ''
+    pullPolicy: IfNotPresent
+  database:
+    # Postgres host. Empty = the chart's Postgres Service.
+    host: ''
+    port: 5432
+  # Env var -> key inside `secretName`. The DB password comes from postgres.secretKeys.password.
+  secretKeys:
+    SEED_ADMIN_EMAIL: SEED_ADMIN_EMAIL
+    SEED_ADMIN_PASSWORD: SEED_ADMIN_PASSWORD
+    GATEWAY_ENC_KEY: GATEWAY_ENC_KEY
+    GATEWAY_SESSION_SECRET: GATEWAY_SESSION_SECRET
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

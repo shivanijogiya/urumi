@@ -33,3 +33,15 @@ bootstrap:
   environmentType: production
   storeTitle: Urumi Store
   # The Job downloads WooCommerce from wordpress.org: the cluster needs egress to it.
+
+postgres:
+  persistence:
+    size: 5Gi
+    storageClass: ''
+
+gateway:
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/gateway
+    tag: ''
+    pullPolicy: IfNotPresent

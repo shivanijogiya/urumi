@@ -79,6 +79,11 @@ same site. Usage: include "platform.wordpressEnv" . | nindent 12
     define('WP_ENVIRONMENT_TYPE', {{ .Values.bootstrap.environmentType | squote }});
 {{- end }}
 
+{{/* Postgres host the gateway connects to: gateway.database.host, else the chart's Postgres Service. */}}
+{{- define "platform.postgresHost" -}}
+{{- default (include "platform.componentName" (dict "ctx" . "component" "postgres")) .Values.gateway.database.host }}
+{{- end }}
+
 {{/* Base URL the gateway side uses for the WooCommerce REST API: bootstrap.wooUrl, else the in-cluster WordPress Service. */}}
 {{- define "platform.wooUrl" -}}
 {{- if .Values.bootstrap.wooUrl }}

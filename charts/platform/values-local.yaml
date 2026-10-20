@@ -28,3 +28,16 @@ bootstrap:
   # Plain HTTP locally: Application Passwords need `local` (or HTTPS).
   environmentType: local
   storeTitle: Urumi Store (local)
+
+postgres:
+  persistence:
+    size: 1Gi
+    storageClass: local-path
+
+gateway:
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-gateway
+    tag: dev
+    # :dev is rebuilt in place; always pull the latest push.
+    pullPolicy: Always
