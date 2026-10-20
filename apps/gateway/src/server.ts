@@ -1,6 +1,12 @@
 import { httpStatusFor, makeError } from '@urumi/contracts';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type pg from 'pg';
+import { LoginLimiter } from './auth/login-limiter.js';
+import { registerAuthRoutes } from './auth/routes.js';
+import { registerCsrfGuard } from './http/csrf.js';
+import { HttpError } from './http/errors.js';
+import { registerKeyRoutes } from './keys/routes.js';
+import { registerUserRoutes } from './users/routes.js';
 
 export const READY_TIMEOUT_MS = 1000;
 
@@ -8,6 +14,10 @@ export interface AppDeps {
   pool: pg.Pool;
   /** Fastify logger options; tests pass nothing (silent). */
   logger?: FastifyServerOptions['logger'];
+  /** Dashboard origin for the CSRF Origin check. Default http://app.localtest.me. */
+  publicOrigin?: string;
+  /** Adds `Secure` to the session cookie. Default false (plain HTTP locally). */
+  cookieSecure?: boolean;
 }
 
 /** JSON logs; credentials in headers are never written. */
@@ -35,6 +45,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: deps.logger ?? false });
+  app.decorate('pool', deps.pool);
+  app.decorate('cookieSecure', deps.cookieSecure ?? false);
+  app.decorateRequest('user', null);
+  app.decorateRequest('sessionId', null);
 
   // Probes run every few seconds; keep them out of the info log.
   app.get('/healthz', { logLevel: 'warn' }, async () => ({ status: 'ok' }));
@@ -54,14 +68,25 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     reply.code(httpStatusFor('NOT_FOUND')).send(makeError('NOT_FOUND', 'Route not found')),
   );
 
+  // The one error handler: everything leaves as the contracts envelope. SQL errors, stack traces
+  // and Fastify internals are logged, never sent.
   app.setErrorHandler((err, req, reply) => {
+    if (err instanceof HttpError) {
+      return reply.code(err.status).send(makeError(err.code, err.message));
+    }
     const status = (err as { statusCode?: number }).statusCode;
     if (status && status >= 400 && status < 500) {
+      // Fastify's own client errors: malformed JSON, body too large, bad content type.
       return reply.code(400).send(makeError('VALIDATION_FAILED', 'Invalid request'));
     }
     req.log.error({ err }, 'unhandled error');
     return reply.code(500).send(makeError('INTERNAL', 'Internal error'));
   });
+
+  registerCsrfGuard(app, deps.publicOrigin ?? 'http://app.localtest.me');
+  registerAuthRoutes(app, new LoginLimiter());
+  registerUserRoutes(app);
+  registerKeyRoutes(app);
 
   return app;
 }

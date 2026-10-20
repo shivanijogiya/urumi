@@ -22,7 +22,12 @@ async function main(): Promise<void> {
 
   // The pool only logs after startup, by which time `server` exists.
   const pool = createPool(config.db, { error: (obj, msg) => server.log.error(obj, msg) });
-  const server = buildApp({ pool, logger: LOGGER_OPTIONS });
+  const server = buildApp({
+    pool,
+    logger: LOGGER_OPTIONS,
+    publicOrigin: config.publicOrigin,
+    cookieSecure: config.cookieSecure,
+  });
 
   const shutdown = async (signal: string) => {
     server.log.info({ signal }, 'shutting down');
