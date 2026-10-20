@@ -49,6 +49,14 @@ wooMcp:
   forwardedProto: https
   hostHeader: ''
 
+everything:
+  enabled: true
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/everything
+    tag: ''
+    pullPolicy: IfNotPresent
+
 gateway:
   image:
     # Replace with the project's GitLab container registry path and a released tag.

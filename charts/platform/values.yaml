@@ -182,6 +182,26 @@ wooMcp:
       cpu: 250m
       memory: 128Mi
 
+# MCP reference server "everything" (G6, D7): upstream 2, killable to show one upstream failing.
+# Internal only: ClusterIP Service, no Ingress, NetworkPolicy admits only the gateway. Registered
+# with the gateway by tests/e2e/seed-upstreams.sh (slug `everything`). Image: apps/everything.
+everything:
+  enabled: true
+  networkPolicy:
+    enabled: true
+  image:
+    repository: registry.gitlab.com/<group>/<project>/everything
+    # Empty = the chart's appVersion.
+    tag: ''
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 192Mi
+
 # MCP gateway + admin API. Runs migrations and seeds the first admin on start.
 gateway:
   enabled: true

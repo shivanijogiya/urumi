@@ -44,6 +44,14 @@ wooMcp:
   forwardedProto: ''
   hostHeader: ''
 
+everything:
+  enabled: true
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-everything
+    tag: dev
+    pullPolicy: Always
+
 gateway:
   image:
     # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
