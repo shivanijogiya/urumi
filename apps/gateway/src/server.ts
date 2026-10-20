@@ -3,14 +3,30 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import type pg from 'pg';
 import { IP_MAX_FAILURES, LoginLimiter } from './auth/login-limiter.js';
 import { registerAuthRoutes } from './auth/routes.js';
+import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
+import { ToolRegistry } from './core/registry.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
+import { UpstreamClient } from './mcp-client/upstream-client.js';
+import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
 import type { LookupFn } from './upstreams/ssrf.js';
 import { registerUserRoutes } from './users/routes.js';
 
 export const READY_TIMEOUT_MS = 1000;
+
+/** Aggregation and the one call path, shared by routes, the MCP endpoint (#15) and chat (#19). */
+export interface ToolService {
+  registry: ToolRegistry;
+  callTool: CallTool;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    tools: ToolService;
+  }
+}
 
 export interface AppDeps {
   pool: pg.Pool;
@@ -31,6 +47,10 @@ export interface AppDeps {
   upstreamAllowedHosts?: readonly string[];
   /** DNS resolver for the SSRF guard; tests inject a stub. Default: the system resolver. */
   lookup?: LookupFn;
+  /** Upstream timeouts; default MCP_TIMEOUTS (list 3 s, call 15 s). Tests shorten them. */
+  mcpTimeouts?: { listMs?: number; callMs?: number };
+  /** Audit hook for every finished callTool (#16 writes the audit row). */
+  onCallFinished?: (record: CallRecord) => void | Promise<void>;
 }
 
 /**
@@ -111,13 +131,29 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     email: new LoginLimiter(),
     ip: new LoginLimiter({ maxFailures: IP_MAX_FAILURES }),
   });
+  const allowedHosts = deps.upstreamAllowedHosts ?? [];
+  const lookup = deps.lookup ? { lookup: deps.lookup } : {};
+  const client = new UpstreamClient({ encKey: deps.encKey, allowedHosts, ...lookup });
+  const registry = new ToolRegistry({
+    pool: deps.pool,
+    client,
+    log: app.log,
+    ...(deps.mcpTimeouts?.listMs ? { listTimeoutMs: deps.mcpTimeouts.listMs } : {}),
+  });
+  const callTool = createCallTool({
+    pool: deps.pool,
+    registry,
+    client,
+    log: app.log,
+    ...(deps.mcpTimeouts?.callMs ? { callTimeoutMs: deps.mcpTimeouts.callMs } : {}),
+    ...(deps.onCallFinished ? { onCallFinished: deps.onCallFinished } : {}),
+  });
+  app.decorate('tools', { registry, callTool });
+
   registerUserRoutes(app);
   registerKeyRoutes(app);
-  registerUpstreamRoutes(app, {
-    encKey: deps.encKey,
-    allowedHosts: deps.upstreamAllowedHosts ?? [],
-    ...(deps.lookup ? { lookup: deps.lookup } : {}),
-  });
+  registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
+  registerToolRoutes(app, registry);
 
   return app;
 }

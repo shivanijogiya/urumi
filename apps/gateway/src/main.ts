@@ -1,5 +1,6 @@
-// Gateway entry point: config -> wait for Postgres -> migrate -> seed admin -> listen.
+// Gateway entry point: config -> wait for Postgres -> migrate -> seed admin -> listen -> health loop.
 import { ConfigError, loadConfig } from './config.js';
+import { HealthMonitor } from './core/health.js';
 import { migrate } from './db/migrate.js';
 import { createPool } from './db/pool.js';
 import { seedAdmin } from './db/seed.js';
@@ -32,8 +33,11 @@ async function main(): Promise<void> {
     upstreamAllowedHosts: config.upstreamAllowedHosts,
   });
 
+  const health = new HealthMonitor({ pool, registry: server.tools.registry, log: server.log });
+
   const shutdown = async (signal: string) => {
     server.log.info({ signal }, 'shutting down');
+    await health.stop().catch(() => undefined);
     await server.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
     process.exit(0);
@@ -45,6 +49,7 @@ async function main(): Promise<void> {
   await migrate(pool, config.migrationsDir, server.log);
   await seedAdmin(pool, config.seedAdmin, server.log);
   await server.listen({ host: '0.0.0.0', port: config.port });
+  health.start();
 }
 
 async function waitForDatabase(

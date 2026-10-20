@@ -18,7 +18,10 @@ const COLUMNS = `id, slug, name, url, enabled, credential_type, credential_heade
  * The API view of a row. Parsed with the strict UpstreamSchema, so an unexpected field (a
  * credential, say) throws and becomes a 500 instead of leaving the server.
  */
-export function toUpstream(row: UpstreamRow, opts: { includeUrl: boolean }): Upstream {
+export function toUpstream(
+  row: UpstreamRow,
+  opts: { includeUrl: boolean; toolCount?: number },
+): Upstream {
   return UpstreamSchema.parse({
     id: row.id,
     slug: row.slug,
@@ -30,8 +33,32 @@ export function toUpstream(row: UpstreamRow, opts: { includeUrl: boolean }): Ups
     status: row.status,
     lastError: row.last_error,
     lastCheckedAt: row.last_checked_at?.toISOString() ?? null,
-    toolCount: 0, // the tool cache arrives with aggregation (#13)
+    toolCount: opts.toolCount ?? 0, // from the tool registry cache
   });
+}
+
+export async function findUpstreamBySlug(db: Db, slug: string): Promise<UpstreamRow | null> {
+  const { rows } = await db.query<UpstreamRow>(`SELECT ${COLUMNS} FROM upstreams WHERE slug = $1`, [
+    slug,
+  ]);
+  return rows[0] ?? null;
+}
+
+/**
+ * Stores a health result, only if the row still has the URL and credential that were checked and
+ * is still enabled. False if the row changed (or is gone) in the meantime.
+ */
+export async function setUpstreamHealth(
+  db: Db,
+  checked: Pick<UpstreamRow, 'id' | 'url' | 'credential_iv'>,
+  result: { status: 'up' | 'down'; lastError: string | null },
+): Promise<boolean> {
+  const { rowCount } = await db.query(
+    `UPDATE upstreams SET status = $4, last_error = $5, last_checked_at = now()
+     WHERE id = $1 AND url = $2 AND credential_iv IS NOT DISTINCT FROM $3::bytea AND enabled`,
+    [checked.id, checked.url, checked.credential_iv, result.status, result.lastError],
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function listUpstreamRows(db: Db): Promise<UpstreamRow[]> {

@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { currentUser, requireAdmin, requireSession } from '../auth/session.js';
 import { encrypt } from '../crypto/secretbox.js';
 import { withTransaction } from '../db/tx.js';
+import type { ToolRegistry } from '../core/registry.js';
 import { conflict, HttpError, notFound, parse } from '../http/errors.js';
 import {
   deleteUpstream,
@@ -25,7 +26,7 @@ import {
 } from './repo.js';
 import { assertSafeUrl, type LookupFn } from './ssrf.js';
 
-const UpstreamParamsSchema = z.object({ id: z.uuid() });
+export const UpstreamParamsSchema = z.object({ id: z.uuid() });
 
 export interface UpstreamRouteOptions {
   /** GATEWAY_ENC_KEY. */
@@ -34,10 +35,13 @@ export interface UpstreamRouteOptions {
   allowedHosts: readonly string[];
   /** DNS resolver for the SSRF guard; the system resolver if unset. */
   lookup?: LookupFn;
+  /** Tool cache: supplies toolCount; edits and deletes invalidate it so tools change at once (D6). */
+  registry: ToolRegistry;
 }
 
 export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRouteOptions): void {
   const { pool } = app;
+  const { registry } = opts;
   const guard = (url: string) =>
     assertSafeUrl(url, { allow: opts.allowedHosts, lookup: opts.lookup });
   /** Sealed with the upstream id as AAD, so the ciphertext only opens on its own row. */
@@ -50,7 +54,9 @@ export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRoute
   app.get(ROUTES.listUpstreams.path, { preHandler: requireSession }, async (req) => {
     const includeUrl = currentUser(req).role === 'admin';
     const rows = await listUpstreamRows(pool);
-    return { upstreams: rows.map((r) => toUpstream(r, { includeUrl })) };
+    return {
+      upstreams: rows.map((r) => toUpstream(r, { includeUrl, toolCount: registry.toolCount(r) })),
+    };
   });
 
   app.post(ROUTES.createUpstream.path, { preHandler: requireAdmin }, async (req, reply) => {
@@ -99,12 +105,14 @@ export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRoute
       });
     });
     if (!row) throw notFound('Upstream');
+    registry.invalidate(id);
     return { upstream: toUpstream(row, { includeUrl: true }) };
   });
 
   app.delete(ROUTES.deleteUpstream.path, { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = parse(UpstreamParamsSchema, req.params);
     if (!(await deleteUpstream(pool, id))) throw notFound('Upstream');
+    registry.invalidate(id);
     return reply.code(204).send();
   });
 }
