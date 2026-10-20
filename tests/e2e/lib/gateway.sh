@@ -2,7 +2,8 @@
 # Gateway admin-API helpers for the e2e and infra scripts. Source it after scripts/lib/common.sh;
 # do not run it. Works with macOS's bash 3.2.
 #
-#   gw_start     port-forward to the gateway Service (local port GW_PORT, default 18080)
+#   gw_start     port-forward to the gateway Service (local port GW_PORT, default 18080); with
+#                GW_URL set (e.g. http://app.localtest.me) it uses that URL (the app Ingress) instead
 #   gw_login     sign in as the seed admin; the session cookie goes to $GW_JAR (tests/e2e/.out/)
 #   gw_api <METHOD> <path> [body-on-stdin]   prints the response body; returns non-zero on HTTP >= 400
 #   gw_stop      ends the port-forward (call it from the EXIT trap)
@@ -15,7 +16,8 @@
 RELEASE=${RELEASE:-urumi}
 ENV_SECRET=${ENV_SECRET:-urumi-env}
 GW_PORT=${GW_PORT:-18080}
-GW_BASE="http://127.0.0.1:$GW_PORT"
+GW_URL=${GW_URL:-}
+GW_BASE=${GW_URL:-http://127.0.0.1:$GW_PORT}
 GW_OUT="$ROOT/tests/e2e/.out"
 GW_JAR="$GW_OUT/gateway-cookies.txt"
 GW_PF_PID=""
@@ -32,6 +34,12 @@ gw_start() {
   mkdir -p "$GW_OUT"
   kc -n "$NAMESPACE" rollout status "deploy/$RELEASE-gateway" --timeout=180s >/dev/null ||
     die "deploy/$RELEASE-gateway is not ready"
+  if [ -n "$GW_URL" ]; then
+    # Only /api and /mcp are routed by the Ingress; any HTTP answer means the gateway is there.
+    [ "$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$GW_BASE/api/auth/me")" != 000 ] ||
+      die "gateway not reachable on $GW_BASE"
+    return 0
+  fi
   kc -n "$NAMESPACE" port-forward "svc/$RELEASE-gateway" "$GW_PORT:80" >"$GW_PF_LOG" 2>&1 &
   GW_PF_PID=$!
   local _
