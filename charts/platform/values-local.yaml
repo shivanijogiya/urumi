@@ -19,8 +19,7 @@ app:
     enabled: false
 
 dashboard:
-  # Off until the dashboard image is pushed; the Ingress then has no `/` route.
-  enabled: false
+  enabled: true
   image:
     # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
     repository: k3d-urumi-registry.localhost:5005/urumi-dashboard
