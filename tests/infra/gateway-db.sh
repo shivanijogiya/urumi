@@ -175,4 +175,13 @@ else
   fail "no secrets in logs" "found:$leaked"
 fi
 
+# 8. NetworkPolicy: a pod that is not the gateway cannot open a TCP connection to Postgres.
+probe="np-probe-$$"
+if kc -n "$NAMESPACE" run "$probe" --image=busybox:1.36 --restart=Never --rm -i --quiet \
+  --command -- sh -c "nc -z -w 3 ${RELEASE:-urumi}-postgres 5432" >/dev/null 2>&1; then
+  fail "networkpolicy blocks non-gateway pods from Postgres" "busybox pod connected to 5432"
+else
+  pass "networkpolicy blocks non-gateway pods from Postgres"
+fi
+
 exit "$failed"

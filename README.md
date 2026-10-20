@@ -129,3 +129,16 @@ tests/infra/store-bootstrap.sh   # Secret, REST 200/401, COD, D1 checkout, no se
 ## License
 
 [MIT](LICENSE)
+
+### Gateway and Postgres
+
+The chart runs Postgres 16 (StatefulSet, 1Gi PVC, reachable only from gateway pods via NetworkPolicy) and the gateway. On start the gateway applies the SQL migrations from `packages/contracts/sql` (advisory-locked, idempotent) and creates the first admin from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` in the `urumi-env` Secret if no admin exists.
+
+```sh
+scripts/build-images.sh gateway            # build + push to the k3d registry
+helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
+kubectl -n urumi rollout restart deploy/urumi-gateway   # pick up a rebuilt :dev image
+tests/infra/gateway-db.sh                  # migrations, seed admin, persistence, NetworkPolicy
+```
+
+Gateway tests use a throwaway Docker Postgres locally, or `TEST_DATABASE_URL` (CI uses a `postgres:16-alpine` service).

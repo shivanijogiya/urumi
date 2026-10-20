@@ -129,6 +129,9 @@ bootstrap:
 # Gateway database (K3, K4). Only the gateway connects to it.
 postgres:
   enabled: true
+  # Ingress to Postgres only from gateway pods.
+  networkPolicy:
+    enabled: true
   image:
     repository: postgres
     tag: 16-alpine
