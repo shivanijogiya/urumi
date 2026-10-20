@@ -5,7 +5,6 @@ import { ConfigError, loadConfig } from '../src/config.js';
 const ENC_KEY = Buffer.alloc(32, 1).toString('base64');
 const SEED_PASSWORD = 'seed-password-value-123';
 const PG_PASSWORD = 'pg-password-value-456';
-const SESSION_SECRET = 's'.repeat(32);
 
 const valid = {
   PGHOST: 'db',
@@ -15,7 +14,6 @@ const valid = {
   SEED_ADMIN_EMAIL: 'Admin@Example.com',
   SEED_ADMIN_PASSWORD: SEED_PASSWORD,
   GATEWAY_ENC_KEY: ENC_KEY,
-  GATEWAY_SESSION_SECRET: SESSION_SECRET,
 };
 
 function errorFor(env: Record<string, string | undefined>): ConfigError {
@@ -42,7 +40,6 @@ describe('loadConfig', () => {
     expect(c.migrationsDir).toBe(MIGRATIONS_DIR);
     expect(c.seedAdmin).toEqual({ email: 'admin@example.com', password: SEED_PASSWORD });
     expect(c.encKey).toHaveLength(32);
-    expect(c.sessionSecret).toBe(SESSION_SECRET);
     expect(c.publicOrigin).toBe('http://app.localtest.me');
     expect(c.cookieSecure).toBe(false);
     // In-cluster the gateway sits behind Traefik, which sets X-Forwarded-For.
@@ -150,7 +147,6 @@ describe('loadConfig', () => {
     'SEED_ADMIN_EMAIL',
     'SEED_ADMIN_PASSWORD',
     'GATEWAY_ENC_KEY',
-    'GATEWAY_SESSION_SECRET',
     'PGHOST',
     'PGUSER',
     'PGPASSWORD',
@@ -176,10 +172,11 @@ describe('loadConfig', () => {
     }
   });
 
-  it('rejects a session secret shorter than 32 characters', () => {
-    expect(errorFor({ ...valid, GATEWAY_SESSION_SECRET: 'x'.repeat(31) }).message).toContain(
-      'GATEWAY_SESSION_SECRET',
-    );
+  it('does not need GATEWAY_SESSION_SECRET and ignores a leftover one (sessions are DB tokens)', () => {
+    expect(() => loadConfig(valid)).not.toThrow();
+    const c = loadConfig({ ...valid, GATEWAY_SESSION_SECRET: 'short' });
+    expect(c).not.toHaveProperty('sessionSecret');
+    expect(JSON.stringify(c)).not.toContain('short');
   });
 
   it('rejects an invalid email and port', () => {
@@ -193,16 +190,9 @@ describe('loadConfig', () => {
       ...valid,
       SEED_ADMIN_PASSWORD: 'tiny-secret',
       GATEWAY_ENC_KEY: badKey,
-      GATEWAY_SESSION_SECRET: 'short-session-secret',
       SEED_ADMIN_EMAIL: 'not-an-email-secret',
     });
-    for (const value of [
-      'tiny-secret',
-      badKey,
-      'short-session-secret',
-      'not-an-email-secret',
-      PG_PASSWORD,
-    ]) {
+    for (const value of ['tiny-secret', badKey, 'not-an-email-secret', PG_PASSWORD]) {
       expect(err.message).not.toContain(value);
     }
   });

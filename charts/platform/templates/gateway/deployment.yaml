@@ -87,7 +87,9 @@ spec:
             - name: CHAT_MODEL
               value: {{ $v.chatModel | quote }}
             {{- if .Values.wooMcp.enabled }}
-            # The internal woo-mcp upstream (W3) and the header secret it requires.
+            # The internal woo-mcp upstream (W3) and the header secret it requires. The gateway code
+            # does not read these (woo is registered through the admin API, credential sealed in
+            # Postgres); tests/infra/woo-mcp-netpol.sh check 4 probes woo-mcp from this pod with them.
             - name: WOO_MCP_URL
               value: {{ include "platform.wooMcpUrl" . | quote }}
             - name: WOO_MCP_SHARED_SECRET

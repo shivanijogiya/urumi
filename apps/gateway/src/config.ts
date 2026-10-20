@@ -28,7 +28,8 @@ const EnvSchema = z.object({
       (v) => /^[A-Za-z0-9+/]+={0,2}$/.test(v) && Buffer.from(v, 'base64').length === 32,
       'must be base64 of exactly 32 bytes',
     ),
-  GATEWAY_SESSION_SECRET: z.string().min(32, 'must be at least 32 characters'),
+  // No GATEWAY_SESSION_SECRET: sessions are random tokens stored hashed in Postgres (nothing is
+  // signed). A leftover value in the environment or the Secret is ignored.
   // Browser origin of the dashboard; state-changing /api requests from any other Origin get 403.
   PUBLIC_ORIGIN: z.preprocess(
     (v) => (v === '' ? undefined : v),
@@ -105,7 +106,6 @@ export interface Config {
   seedAdmin: { email: string; password: string };
   /** AES-256-GCM key for upstream credentials. */
   encKey: Buffer;
-  sessionSecret: string;
   /** e.g. `http://app.localtest.me` (no trailing slash). */
   publicOrigin: string;
   cookieSecure: boolean;
@@ -154,7 +154,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     migrationsDir: e.MIGRATIONS_DIR ?? MIGRATIONS_DIR,
     seedAdmin: { email: e.SEED_ADMIN_EMAIL, password: e.SEED_ADMIN_PASSWORD },
     encKey: Buffer.from(e.GATEWAY_ENC_KEY, 'base64'),
-    sessionSecret: e.GATEWAY_SESSION_SECRET,
     publicOrigin: e.PUBLIC_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,
