@@ -5,6 +5,9 @@ import { z } from 'zod';
 /** Optional string; an empty value counts as unset. */
 const optional = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
 
+const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+const ALLOWED_HOST_RE = new RegExp(`^(?:${LABEL}(?:\\.${LABEL})*|\\*\\.${LABEL}(?:\\.${LABEL})+)$`);
+
 const port = (fallback: number) => z.coerce.number().int().min(1).max(65535).default(fallback);
 
 const EnvSchema = z.object({
@@ -57,6 +60,25 @@ const EnvSchema = z.object({
       .refine((v) => /^(true|false|[0-9]{1,2})$/.test(v), 'must be true, false, or a hop count')
       .transform((v) => (v === 'true' ? true : v === 'false' ? false : Number(v))),
   ),
+  // Hosts exempt from the SSRF address check (in-cluster upstreams): comma-separated exact
+  // hostnames or `*.suffix`, e.g. `*.urumi.svc.cluster.local`. Wildcards need a suffix of at least
+  // two labels, so `*` or `*.com` cannot switch the guard off.
+  UPSTREAM_ALLOWED_HOSTS: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((h) => h.trim().toLowerCase().replace(/\.$/, ''))
+          .filter(Boolean),
+      )
+      .refine(
+        (hosts) => hosts.every((h) => ALLOWED_HOST_RE.test(h)),
+        'must be comma-separated hostnames or *.suffix (suffix of two or more labels)',
+      ),
+  ),
 });
 
 /** Needed unless DATABASE_URL is set. Checked outside zod so they are reported with other errors. */
@@ -79,6 +101,8 @@ export interface Config {
   cookieSecure: boolean;
   /** Fastify trustProxy. */
   trustProxy: boolean | number;
+  /** Lowercase hostnames or `*.suffix`, no trailing dot. */
+  upstreamAllowedHosts: string[];
 }
 
 export class ConfigError extends Error {
@@ -121,6 +145,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     publicOrigin: e.PUBLIC_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,
+    upstreamAllowedHosts: e.UPSTREAM_ALLOWED_HOSTS,
   };
 }
 

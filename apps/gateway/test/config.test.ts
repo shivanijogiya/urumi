@@ -80,6 +80,35 @@ describe('loadConfig', () => {
     expect(errorFor({ ...valid, COOKIE_SECURE: 'yes' }).message).toContain('COOKIE_SECURE');
   });
 
+  it('parses UPSTREAM_ALLOWED_HOSTS as exact hostnames or *.suffix (default empty)', () => {
+    expect(loadConfig(valid).upstreamAllowedHosts).toEqual([]);
+    expect(loadConfig({ ...valid, UPSTREAM_ALLOWED_HOSTS: '' }).upstreamAllowedHosts).toEqual([]);
+    expect(
+      loadConfig({
+        ...valid,
+        UPSTREAM_ALLOWED_HOSTS: ' *.Urumi.svc.cluster.local , woo-mcp.internal.,,api.example.com',
+      }).upstreamAllowedHosts,
+    ).toEqual(['*.urumi.svc.cluster.local', 'woo-mcp.internal', 'api.example.com']);
+  });
+
+  it('rejects malformed or over-broad UPSTREAM_ALLOWED_HOSTS entries', () => {
+    for (const bad of [
+      '*',
+      '*.local',
+      '*.com',
+      'a.*.example.com',
+      '*example.com',
+      'http://example.com',
+      'example.com:8080',
+      'exa mple.com',
+      '-bad.example.com',
+    ]) {
+      expect(errorFor({ ...valid, UPSTREAM_ALLOWED_HOSTS: bad }).message, bad).toContain(
+        'UPSTREAM_ALLOWED_HOSTS',
+      );
+    }
+  });
+
   it('honours PORT, PGPORT and MIGRATIONS_DIR', () => {
     const c = loadConfig({
       ...valid,
