@@ -66,9 +66,16 @@ spec:
                   name: {{ $.Values.secretName }}
                   key: {{ $key }}
             {{- end }}
-            # In-cluster upstreams (woo-mcp, everything) resolve to private IPs; allow-list them.
+            # In-cluster upstreams (woo-mcp, everything) resolve to private IPs; allow-list exactly
+            # those Services. No wildcard: Postgres, MariaDB and WordPress stay blocked.
+            {{- $upstreamHosts := list }}
+            {{- range $component, $enabled := dict "woo-mcp" .Values.wooMcp.enabled "everything" .Values.everything.enabled }}
+            {{- if $enabled }}
+            {{- $upstreamHosts = append $upstreamHosts (printf "%s.%s.svc.cluster.local" (include "platform.componentName" (dict "ctx" $ "component" $component)) $.Release.Namespace) }}
+            {{- end }}
+            {{- end }}
             - name: UPSTREAM_ALLOWED_HOSTS
-              value: {{ .Values.gateway.upstreamAllowedHosts | default (printf "*.%s.svc.cluster.local" .Release.Namespace) | quote }}
+              value: {{ .Values.gateway.upstreamAllowedHosts | default (join "," $upstreamHosts) | quote }}
             # Chat agent (C3). Optional: without the key the gateway runs and /api/chat answers 503.
             # Calls api.anthropic.com:443; no NetworkPolicy restricts gateway egress.
             - name: ANTHROPIC_API_KEY

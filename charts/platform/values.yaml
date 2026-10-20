@@ -231,7 +231,9 @@ everything:
 gateway:
   enabled: true
   # Hosts the SSRF guard lets the gateway reach on private IPs (comma-separated, exact or *.suffix).
-  # Empty = in-cluster services of this namespace only: *.<namespace>.svc.cluster.local
+  # Empty = exactly the in-cluster upstreams this chart deploys (when enabled):
+  # <release>-woo-mcp.<namespace>.svc.cluster.local and <release>-everything.<namespace>.svc...
+  # No wildcard by default, so Postgres, MariaDB and WordPress are not reachable as "upstreams".
   upstreamAllowedHosts: ''
   image:
     repository: registry.gitlab.com/<group>/<project>/gateway
