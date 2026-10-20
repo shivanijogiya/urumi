@@ -43,6 +43,30 @@ describe('loadConfig', () => {
     expect(c.seedAdmin).toEqual({ email: 'admin@example.com', password: SEED_PASSWORD });
     expect(c.encKey).toHaveLength(32);
     expect(c.sessionSecret).toBe(SESSION_SECRET);
+    expect(c.publicOrigin).toBe('http://app.localtest.me');
+    expect(c.cookieSecure).toBe(false);
+  });
+
+  it('honours PUBLIC_ORIGIN and COOKIE_SECURE', () => {
+    const c = loadConfig({
+      ...valid,
+      PUBLIC_ORIGIN: 'https://app.example.com/',
+      COOKIE_SECURE: 'true',
+    });
+    expect(c.publicOrigin).toBe('https://app.example.com');
+    expect(c.cookieSecure).toBe(true);
+    expect(loadConfig({ ...valid, COOKIE_SECURE: 'false' }).cookieSecure).toBe(false);
+  });
+
+  it('rejects a PUBLIC_ORIGIN that is not a bare http(s) origin, and a non-boolean COOKIE_SECURE', () => {
+    for (const origin of [
+      'app.example.com',
+      'ftp://app.example.com',
+      'https://app.example.com/x',
+    ]) {
+      expect(errorFor({ ...valid, PUBLIC_ORIGIN: origin }).message).toContain('PUBLIC_ORIGIN');
+    }
+    expect(errorFor({ ...valid, COOKIE_SECURE: 'yes' }).message).toContain('COOKIE_SECURE');
   });
 
   it('honours PORT, PGPORT and MIGRATIONS_DIR', () => {

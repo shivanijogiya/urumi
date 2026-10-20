@@ -25,6 +25,28 @@ const EnvSchema = z.object({
       'must be base64 of exactly 32 bytes',
     ),
   GATEWAY_SESSION_SECRET: z.string().min(32, 'must be at least 32 characters'),
+  // Browser origin of the dashboard; state-changing /api requests from any other Origin get 403.
+  PUBLIC_ORIGIN: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .url({ protocol: /^https?$/ })
+      .default('http://app.localtest.me')
+      .refine((v) => {
+        // zod 4 runs refinements after a failed format check too.
+        if (!URL.canParse(v)) return false;
+        const u = new URL(v);
+        return u.pathname === '/' && !u.search && !u.hash && !u.username;
+      }, 'must be an http(s) origin without a path')
+      .transform((v) => new URL(v).origin),
+  ),
+  // Secure session cookie; on behind TLS (prod), off for plain-HTTP localtest.me.
+  COOKIE_SECURE: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'], 'must be true or false')
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
 });
 
 /** Needed unless DATABASE_URL is set. Checked outside zod so they are reported with other errors. */
@@ -42,6 +64,9 @@ export interface Config {
   /** AES-256-GCM key for upstream credentials. */
   encKey: Buffer;
   sessionSecret: string;
+  /** e.g. `http://app.localtest.me` (no trailing slash). */
+  publicOrigin: string;
+  cookieSecure: boolean;
 }
 
 export class ConfigError extends Error {
@@ -81,11 +106,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     seedAdmin: { email: e.SEED_ADMIN_EMAIL, password: e.SEED_ADMIN_PASSWORD },
     encKey: Buffer.from(e.GATEWAY_ENC_KEY, 'base64'),
     sessionSecret: e.GATEWAY_SESSION_SECRET,
+    publicOrigin: e.PUBLIC_ORIGIN,
+    cookieSecure: e.COOKIE_SECURE,
   };
 }
 
 function reason(issue: z.core.$ZodIssue): string {
-  if (issue.code === 'custom' || issue.code === 'too_small') return issue.message;
+  if (issue.code === 'custom' || issue.code === 'too_small' || issue.code === 'invalid_value') {
+    return issue.message;
+  }
   if (issue.code === 'invalid_format') return 'is not a valid ' + issue.format;
   return 'is invalid';
 }
