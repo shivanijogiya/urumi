@@ -36,8 +36,13 @@ gw_start() {
     die "deploy/$RELEASE-gateway is not ready"
   if [ -n "$GW_URL" ]; then
     # Only /api and /mcp are routed by the Ingress; any HTTP answer means the gateway is there.
-    [ "$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$GW_BASE/api/auth/me")" != 000 ] ||
-      die "gateway not reachable on $GW_BASE"
+    # Right after a rollout the Ingress can briefly have no ready endpoint (502/503/000): retry.
+    local _code _
+    for _ in $(seq 1 30); do
+      _code=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$GW_BASE/api/auth/me")
+      case "$_code" in 000 | 502 | 503 | 504) sleep 2 ;; *) break ;; esac
+    done
+    case "$_code" in 000 | 502 | 503 | 504) die "gateway not reachable on $GW_BASE (HTTP $_code)" ;; esac
     return 0
   fi
   kc -n "$NAMESPACE" port-forward "svc/$RELEASE-gateway" "$GW_PORT:80" >"$GW_PF_LOG" 2>&1 &

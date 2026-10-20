@@ -6,6 +6,7 @@
 #     reused. If a user exists but its password is not on file (or no longer works), a fresh user
 #     with a run-unique email (usera-<run>@urumi.test) is created instead and recorded.
 #   - registers + enables the 3 upstreams (seed-upstreams.sh) and waits until all are `up`
+#     (E2E_SKIP_GITLAB=1: woo + everything only)
 #   - signs in as A and B (cookie jars in .out/)
 #   - as B: revokes B's earlier e2e keys, creates key 1 (D3, revoked by D5) -> .out/userb.key and
 #     key 2 (D6, D7) -> .out/userb2.key, both mode 600
@@ -90,10 +91,13 @@ B_ID=$(jq -r .user.id "$LAST") B_EMAIL=$(jq -r .user.email "$LAST")
 # Upstreams: seed-upstreams.sh (also through the Ingress) re-sends each one with enabled: true.
 "$E2E_DIR/seed-upstreams.sh" >&2 || fail "seed-upstreams.sh failed"
 gw_login 2>/dev/null || fail "seed admin login failed"
+# E2E_SKIP_GITLAB=1 (no GitLab token, e.g. the CI canary job): only woo + everything. D3/D4 need gitlab.
+SLUGS='["woo", "everything", "gitlab"]'
+[ "${E2E_SKIP_GITLAB:-0}" = 1 ] && SLUGS='["woo", "everything"]'
 all_up() {
   [ "$(api "$ADMIN_JAR" GET /api/upstreams)" = 200 ] &&
-    [ "$(jq '[.upstreams[] | select((.slug == "woo" or .slug == "everything" or .slug == "gitlab")
-      and .enabled and .status == "up")] | length' "$LAST")" = 3 ]
+    [ "$(jq --argjson s "$SLUGS" '[.upstreams[] | select((.slug | IN($s[]))
+      and .enabled and .status == "up")] | length' "$LAST")" = "$(printf '%s' "$SLUGS" | jq length)" ]
 }
 poll 45 all_up || fail "upstreams not all up+enabled: $(jq -c '[.upstreams[] | {slug, enabled, status, lastError}]' "$LAST")"
 

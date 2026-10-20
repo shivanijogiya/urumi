@@ -1,0 +1,56 @@
+# Canary deploy of the gateway (#23, H2; docs/adr/003-canary.md). Ephemeral k3d inside the job via
+# Docker-in-Docker (ADR 000 Q9; proven by spike/k3d-dind): build images, install the stable release,
+# seed, deploy this commit as a 20 % canary, let scripts/canary/verdict.py decide, then promote or
+# roll back. All logic lives in scripts/canary/ci.sh. No external secrets: .env.local is generated.
+#
+# The job succeeds when the decision was applied (PROMOTE -> promoted, ROLLBACK -> rolled back) and
+# fails on HOLD. `canary:bad-release` is the same job with CANARY_FORCE_BAD=1: a 50 % tools/call error
+# rate is injected into the canary and the job must end in ROLLBACK (a one-click drill that leaves a
+# ROLLBACK in the pipeline history; no CI variables needed). Artifacts: verdict.json, dotenv VERDICT=...
+canary:
+  stage: deploy
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ''
+    K3D_VERSION: v5.9.0
+    CANARY_FORCE_BAD: '0'
+  cache: []
+  timeout: 45m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - apk add --no-cache bash curl jq nodejs python3 openssl git kubectl helm
+    - curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=$K3D_VERSION bash
+  script:
+    - export CANARY_KUBE_HOST=docker
+    - export CANARY_INGRESS_IP="$(getent hosts docker | awk '{print $1; exit}')"
+    - bash scripts/canary/ci.sh
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - verdict.json
+      - tests/e2e/.out/seed.log
+    reports:
+      dotenv: verdict.env
+
+# Forced bad release: same pipeline, the canary carries injected faults. Manual everywhere, so a
+# ROLLBACK lands in the pipeline history on demand (H4).
+canary:bad-release:
+  extends: canary
+  variables:
+    CANARY_FORCE_BAD: '1'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true

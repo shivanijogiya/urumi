@@ -1,6 +1,7 @@
 {{- if and .Values.postgres.enabled .Values.postgres.networkPolicy.enabled }}
 {{- $ctx := dict "ctx" $ "component" "postgres" }}
-# Only gateway pods may open connections to Postgres (holds users, key hashes, encrypted credentials).
+# Only this release's gateway pods (stable, plus the canary while enabled) may open connections to
+# Postgres (holds users, key hashes, encrypted credentials).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -16,8 +17,7 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels:
-              {{- include "platform.selectorLabels" (dict "ctx" $ "component" "gateway") | nindent 14 }}
+            {{- include "platform.gatewayPeerSelector" . | nindent 12 }}
       ports:
         - protocol: TCP
           port: 5432

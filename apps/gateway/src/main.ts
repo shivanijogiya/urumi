@@ -36,8 +36,13 @@ async function main(): Promise<void> {
       anthropic: config.anthropicApiKey ? createAnthropicClient(config.anthropicApiKey) : null,
       model: config.chatModel,
     },
+    track: config.track,
+    faultInject: config.faultInject,
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
+  if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {
+    server.log.warn({ track: config.track, ...config.faultInject }, 'FAULT INJECTION is on');
+  }
 
   const health = new HealthMonitor({ pool, registry: server.tools.registry, log: server.log });
 

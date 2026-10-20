@@ -82,3 +82,7 @@ gateway:
   publicOrigin: https://app.example.com
   cookieSecure: true
   chatModel: claude-sonnet-5-5
+
+# Canary (#23): switched on/off by scripts/canary/run.sh; app.tls also secures its IngressRoute.
+gatewayCanary:
+  enabled: false

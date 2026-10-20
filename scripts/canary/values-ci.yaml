@@ -1,0 +1,23 @@
+# Overrides for the ephemeral k3d cluster of the CI `canary` job (scripts/canary/ci.sh), on top of
+# charts/platform/values-local.yaml. Images are built in the job and loaded with `k3d image import`
+# (no registry), so they are never pulled. The dashboard is not needed for the canary verdict.
+dashboard:
+  enabled: false
+
+wooMcp:
+  image:
+    repository: urumi-woo-mcp
+    tag: ci
+    pullPolicy: Never
+
+everything:
+  image:
+    repository: urumi-everything
+    tag: ci
+    pullPolicy: Never
+
+gateway:
+  image:
+    repository: urumi-gateway
+    tag: ci
+    pullPolicy: Never

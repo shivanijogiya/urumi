@@ -10,6 +10,7 @@
 #   RELEASE     Helm release name, default urumi
 #   ENV_SECRET  Secret with the credentials, default urumi-env
 #   GITLAB_MCP_URL  default https://gitlab.com/api/v4/mcp
+#   E2E_SKIP_GITLAB 1 = skip the gitlab upstream (no GITLAB_MCP_TOKEN, e.g. the CI canary job)
 #   tests/e2e/seed-upstreams.sh
 set -euo pipefail
 set +x
@@ -70,7 +71,11 @@ upsert() {
 upsert woo "WooCommerce store" "http://$RELEASE-woo-mcp.$SVC_DOMAIN/mcp" \
   header WOO_MCP_SHARED_SECRET x-woo-mcp-secret
 upsert everything "MCP everything (reference)" "http://$RELEASE-everything.$SVC_DOMAIN/mcp" none
-upsert gitlab "GitLab" "$GITLAB_MCP_URL" bearer GITLAB_MCP_TOKEN
+if [ "${E2E_SKIP_GITLAB:-0}" = 1 ]; then
+  say "E2E_SKIP_GITLAB=1: not registering the gitlab upstream"
+else
+  upsert gitlab "GitLab" "$GITLAB_MCP_URL" bearer GITLAB_MCP_TOKEN
+fi
 
 say "Registered upstreams (status is set by the 15 s health loop):"
 gw_api GET /api/upstreams |

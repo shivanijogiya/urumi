@@ -1,0 +1,28 @@
+{{- if and .Values.gateway.enabled .Values.gatewayCanary.enabled }}
+{{- $ctx := dict "ctx" $ "component" "gateway-canary" }}
+{{- $c := .Values.gatewayCanary }}
+{{- $tag := required "gatewayCanary.image.tag is required when gatewayCanary.enabled" $c.image.tag }}
+# Canary of the gateway (#23, H2; docs/adr/003-canary.md): the stable pod template with another
+# image tag, one replica, `track: canary`. It shares Postgres with the stable Deployment. Traffic:
+# gatewayCanary.weight % of /api and /mcp (app-ingressroute.yaml). Driven by scripts/canary/run.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+    track: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    {{- include "platform.gatewayPodTemplate" (dict
+      "ctx" $
+      "component" "gateway-canary"
+      "track" "canary"
+      "image" (printf "%s:%s" ($c.image.repository | default .Values.gateway.image.repository) $tag)
+      "pullPolicy" ($c.image.pullPolicy | default .Values.gateway.image.pullPolicy)
+      "fault" $c.faultInject) | nindent 4 }}
+{{- end }}

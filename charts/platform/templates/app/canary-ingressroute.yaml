@@ -1,0 +1,44 @@
+{{- if and .Values.gateway.enabled .Values.gatewayCanary.enabled }}
+{{- $c := .Values.gatewayCanary }}
+{{- $weight := int $c.weight }}
+{{- if or (lt $weight 0) (gt $weight 100) }}
+{{- fail "gatewayCanary.weight must be 0..100" }}
+{{- end }}
+{{- $ctx := dict "ctx" $ "component" "app" }}
+# Canary traffic split (#23): while the canary is enabled, this Traefik IngressRoute takes /api and
+# /mcp on the app host (explicit priority above the app Ingress's rules) and sends
+# gatewayCanary.weight % of requests to the canary Service, the rest to the stable one (weighted
+# round robin). Disabling the canary deletes it and the app Ingress serves those paths again, so
+# there is no gap. The dashboard (/) stays on the Ingress.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "app-canary") }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  entryPoints:
+    {{- if $c.entryPoints }}
+    {{- toYaml $c.entryPoints | nindent 4 }}
+    {{- else if .Values.app.tls.enabled }}
+    - websecure
+    {{- else }}
+    - web
+    {{- end }}
+  routes:
+    - kind: Rule
+      # Same paths as the Ingress's Prefix /api and /mcp (a path segment, not a string prefix).
+      match: Host(`{{ .Values.app.host }}`) && PathRegexp(`^/(api|mcp)(/|$)`)
+      priority: {{ int $c.priority }}
+      services:
+        - name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway") }}
+          port: 80
+          weight: {{ sub 100 $weight }}
+        - name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway-canary") }}
+          port: 80
+          weight: {{ $weight }}
+  {{- if .Values.app.tls.enabled }}
+  tls:
+    secretName: {{ required "app.tls.secretName is required when app.tls.enabled" .Values.app.tls.secretName }}
+  {{- end }}
+{{- end }}
