@@ -1,3 +1,4 @@
+/* global process, URL, console */
 // Minimal MCP client for the e2e steps: what an external team member's client does, given only the
 // gateway URL and an API key. Uses the official SDK Client + StreamableHTTPClientTransport.
 //   MCP_KEY_FILE=<file holding the key> node mcp-client.mjs <url> list
