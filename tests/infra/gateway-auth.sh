@@ -59,7 +59,10 @@ contains_secret() { printf '%s\n' "$1" | grep -qF -f <(printf '%s\n' "$2"); }
 TMP=$(mktemp -d)
 PF_PID=""
 cleanup() {
-  [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null || true
+  if [ -n "$PF_PID" ]; then
+    kill "$PF_PID" 2>/dev/null || true
+    wait "$PF_PID" 2>/dev/null || true # reap it, so bash does not report "Terminated"
+  fi
   rm -rf "$TMP"
 }
 trap cleanup EXIT
