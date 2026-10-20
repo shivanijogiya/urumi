@@ -116,7 +116,8 @@ esac
 
 # --- 4. Persistence + restart -------------------------------------------------------------------
 say "Writing marker ($MARKER)"
-sql "CREATE SCHEMA IF NOT EXISTS infra_test;
+sql "SET client_min_messages = warning;
+     CREATE SCHEMA IF NOT EXISTS infra_test;
      CREATE TABLE IF NOT EXISTS infra_test.marker (id int PRIMARY KEY, value text NOT NULL);
      INSERT INTO infra_test.marker VALUES (1, :'marker')
        ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value;" -v "marker=$MARKER"
