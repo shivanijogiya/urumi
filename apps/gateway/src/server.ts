@@ -10,6 +10,7 @@ import { ToolRegistry } from './core/registry.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
+import { registerMcpEndpoint } from './mcp/endpoint.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
@@ -161,6 +162,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
   registerToolRoutes(app, registry);
   registerAuditRoutes(app);
+  registerMcpEndpoint(app, { registry, callTool });
 
   return app;
 }

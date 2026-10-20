@@ -13,7 +13,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { forbidden } from './errors.js';
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-/** Bearer-key routes (no cookie, so no CSRF). POST /mcp arrives with #15. */
+/** Bearer-key routes (no cookie, so no CSRF): the external MCP endpoint (src/mcp/endpoint.ts). */
 const EXEMPT_ROUTES = new Set(['/mcp']);
 
 function hasBody(req: FastifyRequest): boolean {
