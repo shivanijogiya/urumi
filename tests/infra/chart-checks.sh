@@ -3,6 +3,8 @@
 # chart with `helm template` and asserts that:
 #   - every container (incl. init containers) in a Deployment/StatefulSet has livenessProbe,
 #     readinessProbe, resources.requests and resources.limits
+#   - every container (incl. init containers) in a Job has resources.requests and
+#     resources.limits (Jobs run to completion: exempt from the probe requirement)
 #   - no `kind: Secret` is rendered (the chart only references an existing Secret)
 #   - at least one workload is rendered (guards against an empty render passing silently)
 # YAML -> JSON uses `kubectl annotate --local` (no API server); node does the assertions.
@@ -28,11 +30,14 @@ const raw =require("fs").readFileSync(0, "utf8").trim();
 const docs = raw ? JSON.parse("[" + raw.replace(/\n}\n{/g, "\n},\n{") + "]") : [];
 const problems = [];
 let workloads = 0;
+let jobs = 0;
 for (const d of docs) {
   const id = `${d.kind}/${d.metadata && d.metadata.name}`;
   if (d.kind === "Secret") problems.push(`${id}: chart must not render a Secret`);
-  if (d.kind !== "Deployment" && d.kind !== "StatefulSet") continue;
-  workloads++;
+  const isJob = d.kind === "Job";
+  if (d.kind !== "Deployment" && d.kind !== "StatefulSet" && !isJob) continue;
+  if (isJob) jobs++;
+  else workloads++;
   const spec = (d.spec && d.spec.template && d.spec.template.spec) || {};
   const containers = [...(spec.containers || []), ...(spec.initContainers || [])];
   if (containers.length === 0) problems.push(`${id}: no containers`);
@@ -44,16 +49,16 @@ for (const d of docs) {
       [r.requests && Object.keys(r.requests).length, "resources.requests"],
       [r.limits && Object.keys(r.limits).length, "resources.limits"],
     ]) {
-      // Init containers run to completion; probes are not allowed on them.
+      // Init containers and Jobs run to completion; probes do not apply to them.
       const isInit = (spec.initContainers || []).includes(c);
-      if (isInit && what.endsWith("Probe")) continue;
+      if ((isInit || isJob) && what.endsWith("Probe")) continue;
       if (!ok) problems.push(`${id} container ${c.name}: missing ${what}`);
     }
   }
 }
 if (workloads === 0) problems.push("no Deployment/StatefulSet rendered");
 for (const p of problems) console.log("  " + p);
-console.log(`  ${docs.length} objects, ${workloads} workloads checked`);
+console.log(`  ${docs.length} objects, ${workloads} workloads + ${jobs} jobs checked`);
 process.exit(problems.length ? 1 : 0);
 '
 
