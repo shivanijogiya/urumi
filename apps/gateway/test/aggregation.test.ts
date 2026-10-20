@@ -12,6 +12,11 @@ import {
 } from '@urumi/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CALL_TIMEOUT_MS, GatewayError, type CallRecord } from '../src/core/call-tool.js';
+import {
+  MAX_INPUT_SCHEMA_BYTES,
+  MAX_RESULT_BYTES,
+  MAX_TOOLS_PER_UPSTREAM,
+} from '../src/core/limits.js';
 import { DEFAULT_LIST_TIMEOUT_MS, sanitizeDescription } from '../src/core/registry.js';
 import { LOGGER_OPTIONS } from '../src/server.js';
 import { ADMIN, setupApp, type TestApp } from './helpers/app.js';
@@ -372,6 +377,78 @@ describe('untrusted descriptions', () => {
     expect(tool!.description.length).toBeLessThanOrEqual(500);
     // eslint-disable-next-line no-control-regex
     expect(tool!.description).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+  });
+});
+
+describe('untrusted payload sizes', () => {
+  it('uses the agreed limits', () => {
+    expect(MAX_TOOLS_PER_UPSTREAM).toBe(200);
+    expect(MAX_INPUT_SCHEMA_BYTES).toBe(16 * 1024);
+    expect(MAX_RESULT_BYTES).toBe(256 * 1024);
+  });
+
+  it('keeps at most 200 tools per upstream', async () => {
+    const tools = Array.from({ length: 250 }, (_, i) => ({ name: `tool_${i}` }));
+    const a = await fake({ identity: 'many', tools });
+    const id = await addUpstream('many', a.url);
+
+    const listed = await listTools();
+    expect(listed).toHaveLength(MAX_TOOLS_PER_UPSTREAM);
+    expect(listed[0]!.name).toBe('many__tool_0');
+    expect(listed.at(-1)!.name).toBe('many__tool_199');
+    expect(logs).toMatch(/tool list truncated/);
+
+    const list = await t.request('GET', '/api/upstreams', { cookie: member });
+    expect(UpstreamListResponseSchema.parse(list.json()).upstreams[0]).toMatchObject({
+      id,
+      toolCount: MAX_TOOLS_PER_UPSTREAM,
+    });
+    await expectCallError(call('many__tool_220'), 'TOOL_NOT_FOUND');
+  });
+
+  it('drops a tool whose inputSchema is over 16 KB, logging no content', async () => {
+    const marker = 'OVERSIZED-SCHEMA-MARKER';
+    const a = await fake({
+      identity: 'server-a',
+      tools: [
+        { name: 'search' },
+        {
+          name: 'huge',
+          inputSchema: { description: marker + 'z'.repeat(MAX_INPUT_SCHEMA_BYTES) },
+        },
+        // Just under the limit is kept.
+        { name: 'big', inputSchema: { description: 'z'.repeat(MAX_INPUT_SCHEMA_BYTES - 200) } },
+      ],
+    });
+    await addUpstream('a', a.url);
+
+    expect((await listTools()).map((x) => x.name)).toEqual(['a__search', 'a__big']);
+    expect(logs).toMatch(/inputSchema too large/);
+    expect(logs).toContain('a__huge');
+    expect(logs).not.toContain(marker);
+    await expectCallError(call('a__huge'), 'TOOL_NOT_FOUND');
+    expect(a.calls).toHaveLength(0);
+  });
+
+  it('rejects a tool result over 256 KB with UPSTREAM_ERROR', async () => {
+    const big = await fake({ identity: 'big', resultPadding: MAX_RESULT_BYTES });
+    await addUpstream('big', big.url);
+
+    const err = await expectCallError(call('big__search'), 'UPSTREAM_ERROR');
+    expect(err.message).toBe('Tool result too large');
+    expect(records.at(-1)).toMatchObject({
+      serverSlug: 'big',
+      tool: 'search',
+      outcome: 'error',
+      errorCode: 'UPSTREAM_ERROR',
+    });
+  });
+
+  it('passes a result just under 256 KB', async () => {
+    const ok = await fake({ identity: 'ok', resultPadding: MAX_RESULT_BYTES - 1024 });
+    await addUpstream('ok', ok.url);
+    expect(answeredBy(await call('ok__search')).server).toBe('ok');
+    expect(records.at(-1)).toMatchObject({ outcome: 'ok' });
   });
 });
 

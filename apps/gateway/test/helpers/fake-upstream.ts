@@ -11,6 +11,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 export interface FakeTool {
   name: string;
   description?: string;
+  /** Default: `{ type: 'object', properties: { q: { type: 'string' } } }`. */
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface FakeUpstreamOptions {
@@ -23,6 +25,8 @@ export interface FakeUpstreamOptions {
   callDelayMs?: number;
   /** If set, requests without `Authorization: Bearer <value>` get HTTP 401. */
   requireBearer?: string;
+  /** Pads every tool result's text with this many extra characters (oversized results). */
+  resultPadding?: number;
 }
 
 export interface FakeUpstream {
@@ -51,7 +55,11 @@ function mcpServer(opts: FakeUpstreamOptions, calls: FakeUpstream['calls']): Mcp
       tools: tools.map((t) => ({
         name: t.name,
         description: t.description ?? '',
-        inputSchema: { type: 'object' as const, properties: { q: { type: 'string' } } },
+        inputSchema: {
+          type: 'object' as const,
+          properties: { q: { type: 'string' } },
+          ...t.inputSchema,
+        },
       })),
     };
   });
@@ -62,6 +70,7 @@ function mcpServer(opts: FakeUpstreamOptions, calls: FakeUpstream['calls']): Mcp
       server: opts.identity,
       tool: req.params.name,
       args: req.params.arguments,
+      padding: 'x'.repeat(opts.resultPadding ?? 0),
     });
     return { content: [{ type: 'text', text }] };
   });

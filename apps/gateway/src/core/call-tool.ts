@@ -13,6 +13,7 @@ import type pg from 'pg';
 import { HttpError } from '../http/errors.js';
 import { UpstreamError, type UpstreamClient } from '../mcp-client/upstream-client.js';
 import { findUpstreamBySlug } from '../upstreams/repo.js';
+import { jsonBytes, MAX_RESULT_BYTES } from './limits.js';
 import { isListable, type RegisteredTool, type ToolRegistry } from './registry.js';
 
 export const DEFAULT_CALL_TIMEOUT_MS = MCP_TIMEOUTS.callMs;
@@ -152,6 +153,14 @@ export function createCallTool(deps: CallToolDeps): CallTool {
           'tool call failed',
         );
         throw toGatewayError(err, row.slug);
+      }
+      const resultBytes = jsonBytes(result);
+      if (resultBytes > MAX_RESULT_BYTES) {
+        deps.log.warn(
+          { upstream: row.slug, tool: tool.name, bytes: resultBytes, max: MAX_RESULT_BYTES },
+          'tool result too large',
+        );
+        throw new GatewayError('UPSTREAM_ERROR', 'Tool result too large');
       }
       record.outcome = result.isError ? 'error' : 'ok';
       return result;

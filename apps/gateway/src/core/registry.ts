@@ -7,12 +7,15 @@
 // Upstream tool names and descriptions are untrusted data: names are qualified with
 // qualifyToolName (sanitised, `{slug}__{tool}`), descriptions stripped of control characters and
 // capped. The qualified → original name map lives here; routing never reverses sanitisation.
+// Size caps (limits.ts): at most 200 tools per upstream; tools with an oversized inputSchema are
+// dropped.
 import { MCP_TIMEOUTS, qualifyToolName, type Tool } from '@urumi/contracts';
 import type { UpstreamRow } from '@urumi/contracts/db';
 import type { FastifyBaseLogger } from 'fastify';
 import type pg from 'pg';
 import type { UpstreamClient } from '../mcp-client/upstream-client.js';
 import { listUpstreamRows } from '../upstreams/repo.js';
+import { jsonBytes, MAX_INPUT_SCHEMA_BYTES, MAX_TOOLS_PER_UPSTREAM } from './limits.js';
 
 export const DEFAULT_LIST_TIMEOUT_MS = MCP_TIMEOUTS.listMs;
 export const TOOL_CACHE_TTL_MS = 30_000;
@@ -149,11 +152,26 @@ export class ToolRegistry {
     row: UpstreamRow,
     raw: { name: string; description?: string; inputSchema: object }[],
   ): RegisteredTool[] {
+    if (raw.length > MAX_TOOLS_PER_UPSTREAM) {
+      this.deps.log.warn(
+        { upstream: row.slug, received: raw.length, kept: MAX_TOOLS_PER_UPSTREAM },
+        'tool list truncated',
+      );
+    }
     const seen = new Set<string>();
     const tools: RegisteredTool[] = [];
-    for (const t of raw) {
+    for (const t of raw.slice(0, MAX_TOOLS_PER_UPSTREAM)) {
       if (!t.name) continue;
       const name = qualifyToolName(row.slug, t.name);
+      const schemaBytes = jsonBytes(t.inputSchema);
+      if (schemaBytes > MAX_INPUT_SCHEMA_BYTES) {
+        // The size and the sanitised name only: the schema itself is untrusted content.
+        this.deps.log.warn(
+          { upstream: row.slug, tool: name, bytes: schemaBytes, max: MAX_INPUT_SCHEMA_BYTES },
+          'tool dropped: inputSchema too large',
+        );
+        continue;
+      }
       if (seen.has(name)) {
         // Sanitising made two upstream names equal (`foo.bar`, `foo_bar`): keep the first.
         this.deps.log.warn(
