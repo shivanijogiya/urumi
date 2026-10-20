@@ -116,7 +116,13 @@ describe('admin CRUD', () => {
 
     const edit = await t.request('PATCH', `/api/upstreams/${created.id}`, {
       cookie: admin,
-      body: { name: 'Woo store', url: 'https://api.example.com/mcp', enabled: false },
+      body: {
+        name: 'Woo store',
+        url: 'https://api.example.com/mcp',
+        enabled: false,
+        // A new host needs the credential re-entered (see 'credential on host change').
+        credential: { type: 'bearer', value: OTHER_SECRET },
+      },
     });
     expect(edit.statusCode, edit.body).toBe(200);
     expectNoSecret(edit);
@@ -344,6 +350,82 @@ describe('credentials', () => {
       credential_tag: null,
     });
     expect(credentialHeaders(await row(u.id), ENC_KEY)).toEqual({});
+  });
+});
+
+describe('credential on host change', () => {
+  const NEW_HOST_URL = 'https://api.example.com/mcp';
+  const patch = (id: string, body: Record<string, unknown>) =>
+    t.request('PATCH', `/api/upstreams/${id}`, { cookie: admin, body });
+
+  it('rejects a new origin without the credential (400) and leaves the row unchanged', async () => {
+    const u = await create({ credential: { type: 'bearer', value: SECRET } });
+    const before = await row(u.id);
+    for (const url of [
+      NEW_HOST_URL, // host
+      'https://woo-mcp.urumi.svc.cluster.local:8080/mcp', // scheme
+      'http://woo-mcp.urumi.svc.cluster.local:9090/mcp', // port
+    ]) {
+      const res = await patch(u.id, { url, name: 'Changed' });
+      expectError(res, 400, 'VALIDATION_FAILED');
+      expect(ErrorEnvelopeSchema.parse(res.json()).error.message).toBe(
+        'Re-enter the credential when changing the upstream host',
+      );
+    }
+    expect(await row(u.id)).toEqual(before);
+  });
+
+  it('accepts a new origin with a new credential and stores fresh ciphertext', async () => {
+    const u = await create({ credential: { type: 'bearer', value: SECRET } });
+    const before = await row(u.id);
+    const res = await patch(u.id, {
+      url: NEW_HOST_URL,
+      credential: { type: 'bearer', value: OTHER_SECRET },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expectNoSecret(res);
+    const after = await row(u.id);
+    expect(after.url).toBe(NEW_HOST_URL);
+    expect(Buffer.from(after.credential_ciphertext!)).not.toEqual(
+      Buffer.from(before.credential_ciphertext!),
+    );
+    expect(credentialHeaders(after, ENC_KEY)).toEqual({ Authorization: `Bearer ${OTHER_SECRET}` });
+  });
+
+  it('accepts a new origin with credential: null and clears it', async () => {
+    const u = await create({ credential: { type: 'header', headerName: 'X-Key', value: SECRET } });
+    const res = await patch(u.id, { url: NEW_HOST_URL, credential: null });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await row(u.id)).toMatchObject({
+      url: NEW_HOST_URL,
+      credential_type: 'none',
+      credential_header_name: null,
+      credential_ciphertext: null,
+      credential_iv: null,
+      credential_tag: null,
+    });
+  });
+
+  it('keeps the credential on a path-only change (same origin)', async () => {
+    const u = await create({ credential: { type: 'bearer', value: SECRET } });
+    const before = await row(u.id);
+    // Same origin, different spelling of the host and path.
+    const url = 'http://WOO-MCP.urumi.svc.cluster.local:8080/v2/mcp';
+    const res = await patch(u.id, { url });
+    expect(res.statusCode, res.body).toBe(200);
+    const after = await row(u.id);
+    expect(after.url).toBe(url);
+    expect(Buffer.from(after.credential_ciphertext!)).toEqual(
+      Buffer.from(before.credential_ciphertext!),
+    );
+    expect(credentialHeaders(after, ENC_KEY)).toEqual({ Authorization: `Bearer ${SECRET}` });
+  });
+
+  it('allows a host change on an upstream without a credential', async () => {
+    const u = await create();
+    const res = await patch(u.id, { url: NEW_HOST_URL });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await row(u.id)).toMatchObject({ url: NEW_HOST_URL, credential_type: 'none' });
   });
 });
 

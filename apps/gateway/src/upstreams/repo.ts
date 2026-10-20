@@ -39,10 +39,16 @@ export async function listUpstreamRows(db: Db): Promise<UpstreamRow[]> {
   return rows;
 }
 
-export async function findUpstreamRow(db: Db, id: string): Promise<UpstreamRow | null> {
-  const { rows } = await db.query<UpstreamRow>(`SELECT ${COLUMNS} FROM upstreams WHERE id = $1`, [
-    id,
-  ]);
+/** `forUpdate` locks the row until the surrounding transaction ends. */
+export async function findUpstreamRow(
+  db: Db,
+  id: string,
+  opts: { forUpdate?: boolean } = {},
+): Promise<UpstreamRow | null> {
+  const { rows } = await db.query<UpstreamRow>(
+    `SELECT ${COLUMNS} FROM upstreams WHERE id = $1${opts.forUpdate ? ' FOR UPDATE' : ''}`,
+    [id],
+  );
   return rows[0] ?? null;
 }
 

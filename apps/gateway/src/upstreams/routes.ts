@@ -12,9 +12,11 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { currentUser, requireAdmin, requireSession } from '../auth/session.js';
 import { encrypt } from '../crypto/secretbox.js';
-import { conflict, notFound, parse } from '../http/errors.js';
+import { withTransaction } from '../db/tx.js';
+import { conflict, HttpError, notFound, parse } from '../http/errors.js';
 import {
   deleteUpstream,
+  findUpstreamRow,
   insertUpstream,
   listUpstreamRows,
   toUpstream,
@@ -73,9 +75,28 @@ export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRoute
     const patch = parse(UpdateUpstreamRequestSchema, req.body);
     if (patch.url !== undefined) await guard(patch.url);
     const { credential, ...rest } = patch;
-    const row = await updateUpstream(pool, id, {
-      ...rest,
-      ...(credential === undefined ? {} : { credential: credential && seal(id, credential) }),
+
+    // Row lock: the credential check and the update see the same row.
+    const row = await withTransaction(pool, async (tx) => {
+      const current = await findUpstreamRow(tx, id, { forUpdate: true });
+      if (!current) throw notFound('Upstream');
+      // A stored credential must not follow the upstream to a new origin (scheme, host, port)
+      // unless the admin re-enters it or removes it. Path-only changes keep it.
+      if (
+        patch.url !== undefined &&
+        credential === undefined &&
+        current.credential_type !== 'none' &&
+        new URL(patch.url).origin !== new URL(current.url).origin
+      ) {
+        throw new HttpError(
+          'VALIDATION_FAILED',
+          'Re-enter the credential when changing the upstream host',
+        );
+      }
+      return updateUpstream(tx, id, {
+        ...rest,
+        ...(credential === undefined ? {} : { credential: credential && seal(id, credential) }),
+      });
     });
     if (!row) throw notFound('Upstream');
     return { upstream: toUpstream(row, { includeUrl: true }) };
