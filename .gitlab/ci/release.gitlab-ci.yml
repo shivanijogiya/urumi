@@ -1,0 +1,206 @@
+# Release pipeline (issue #22, H1): app images + Container Scanning + versioned Helm chart,
+# all in this project's GitLab registry. Included from the root .gitlab-ci.yml, which owns
+# `stages` (lint, test, build, secure, release), `workflow` and the Secret Detection / SAST /
+# IaC scanners. See .gitlab/ci/README.md.
+#
+# - MR pipelines build every image (no push) and lint + package the chart (artifact).
+# - Protected default-branch and protected vX.Y.Z tag pipelines push the images, scan them,
+#   then push the chart. Nothing is published from MRs or unprotected refs.
+# - Only the predefined CI_REGISTRY* credentials are used; no project secrets.
+
+include:
+  - template: Jobs/Container-Scanning.gitlab-ci.yml
+
+.release:conditions:
+  rules:
+    - if: &release-if-mr $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: &release-if-default-branch $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null
+    - if: &release-if-tag $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_TAG =~ /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$/
+
+.release:snippets:
+  script:
+    # Refuse to push unless GitLab says this ref is protected (backs up the job rules).
+    - &release-require-protected |
+      if [ "$CI_COMMIT_REF_PROTECTED" != "true" ] || [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+        echo "Refusing to publish: '$CI_COMMIT_REF_NAME' is not a protected branch/tag pipeline." >&2
+        exit 1
+      fi
+    # Defines release_build: rootless BuildKit build of apps/$RELEASE_APP (repo root context,
+    # like scripts/build-images.sh) with OCI labels.
+    - &release-buildctl |
+      release_build() {
+        buildctl-daemonless.sh build \
+          --frontend dockerfile.v0 \
+          --local context=. \
+          --local dockerfile="apps/$RELEASE_APP" \
+          --opt filename=Dockerfile \
+          --opt label:org.opencontainers.image.title="$RELEASE_APP" \
+          --opt label:org.opencontainers.image.source="$CI_PROJECT_URL" \
+          --opt label:org.opencontainers.image.revision="$CI_COMMIT_SHA" \
+          --opt label:org.opencontainers.image.created="$CI_COMMIT_TIMESTAMP" \
+          --opt label:org.opencontainers.image.version="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}" \
+          "$@"
+      }
+
+# One job per app image. Keep in sync with apps/*/Dockerfile (release-config.test.sh checks).
+.release:apps:
+  parallel:
+    matrix:
+      - RELEASE_APP: [woo-mcp, gateway, dashboard, everything]
+
+# ---------------------------------------------------------------------------
+# Images: $CI_REGISTRY_IMAGE/<app>:<short sha> (+ :<X.Y.Z> on release tags)
+# ---------------------------------------------------------------------------
+.release:image:
+  extends: .release:apps
+  stage: build
+  image:
+    # Rootless BuildKit: no privileged Docker-in-Docker. Bump the pin deliberately.
+    name: moby/buildkit:v0.23.0-rootless
+    entrypoint: ['']
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  cache: []
+  timeout: 30m
+
+release:image:build:
+  extends: .release:image
+  interruptible: true
+  script:
+    - *release-buildctl
+    # No exporter: the build must succeed, but nothing is pushed or uploaded from MRs.
+    - release_build
+  rules:
+    - if: *release-if-mr
+
+release:image:publish:
+  extends: .release:image
+  interruptible: false
+  before_script:
+    - *release-require-protected
+    - mkdir -p "$HOME/.docker"
+    - printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')" > "$HOME/.docker/config.json"
+  script:
+    - *release-buildctl
+    - |
+      names="$CI_REGISTRY_IMAGE/$RELEASE_APP:$CI_COMMIT_SHORT_SHA"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then names="$names,$CI_REGISTRY_IMAGE/$RELEASE_APP:${CI_COMMIT_TAG#v}"; fi
+      echo "Publishing: $names"
+      release_build \
+        --opt attest:provenance=mode=min \
+        --output "type=image,\"name=$names\",push=true"
+  rules:
+    - if: *release-if-tag
+    - if: *release-if-default-branch
+
+# ---------------------------------------------------------------------------
+# Container Scanning of every pushed image (GitLab template, one job per app).
+# ---------------------------------------------------------------------------
+# The template's single-image default job is replaced by the matrix job below.
+container_scanning:
+  rules:
+    - when: never
+
+release:container-scanning:
+  extends: [container_scanning, .release:apps]
+  # After `build` (images pushed), before `release` (chart publish waits for the scans).
+  stage: secure
+  cache: []
+  allow_failure: false
+  variables:
+    CS_IMAGE: $CI_REGISTRY_IMAGE/$RELEASE_APP:$CI_COMMIT_SHORT_SHA
+    CS_REGISTRY_USER: $CI_REGISTRY_USER
+    CS_REGISTRY_PASSWORD: $CI_REGISTRY_PASSWORD
+  rules:
+    - if: *release-if-tag
+    - if: *release-if-default-branch
+
+# ---------------------------------------------------------------------------
+# Helm chart: oci://$CI_REGISTRY_IMAGE/charts/<chart name>:<CHART_VERSION>
+# ---------------------------------------------------------------------------
+.release:chart:
+  image:
+    name: alpine/helm:3.16.4
+    entrypoint: ['']
+  cache: []
+  before_script:
+    # Version + appVersion from chart-version.sh; lint (default, local, prod values); package.
+    - sh .gitlab/ci/scripts/chart-package.sh charts/platform dist > dist.env
+    - cat dist.env
+    - . ./dist.env
+
+release:chart:package:
+  extends: .release:chart
+  stage: build
+  interruptible: true
+  script:
+    - ls -l dist/
+  artifacts:
+    paths: [dist/]
+    expire_in: 1 week
+  rules:
+    - if: *release-if-mr
+
+release:chart:publish:
+  extends: .release:chart
+  stage: release
+  interruptible: false
+  resource_group: release-chart
+  script:
+    - *release-require-protected
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | helm registry login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - |
+      # Released versions are immutable: never overwrite an existing tag's chart.
+      # (Default-branch versions carry the commit, so a retry re-pushes the same content.)
+      ref="oci://$CI_REGISTRY_IMAGE/charts/$CHART_NAME"
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        if out="$(helm show chart "$ref" --version "$CHART_VERSION" 2>&1)"; then
+          echo "Chart $ref:$CHART_VERSION already exists; refusing to overwrite. Cut a new tag." >&2
+          exit 1
+        elif ! printf '%s' "$out" | grep -q 'not found'; then
+          echo "Could not check whether $ref:$CHART_VERSION exists; not publishing: $out" >&2
+          exit 1
+        fi
+      fi
+    - helm push "$CHART_PACKAGE" "oci://$CI_REGISTRY_IMAGE/charts"
+  artifacts:
+    paths: [dist/]
+    expire_in: 30 days
+  rules:
+    - if: *release-if-tag
+    - if: *release-if-default-branch
+
+# ---------------------------------------------------------------------------
+# Tag pipelines: fail fast and loudly when the tag can't be released (otherwise the
+# publish jobs are simply not created and the pipeline would go silently green).
+# ---------------------------------------------------------------------------
+release:preflight:
+  stage: lint
+  image:
+    name: alpine/helm:3.16.4
+    entrypoint: ['']
+  cache: []
+  script:
+    - |
+      if [ "$CI_COMMIT_REF_PROTECTED" != "true" ]; then
+        echo "Tag $CI_COMMIT_TAG is not protected, so nothing will be published. Protect tags matching v* in Settings > Repository > Protected tags." >&2
+        exit 1
+      fi
+    - sh .gitlab/ci/scripts/chart-version.sh charts/platform
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# Policy + helper tests for this file and the scripts it runs.
+release:config-tests:
+  stage: lint
+  image:
+    name: alpine/helm:3.16.4
+    entrypoint: ['']
+  cache: []
+  interruptible: true
+  before_script:
+    - apk add --no-cache bash jq
+  script:
+    - bash .gitlab/ci/tests/chart-version.test.sh
+    - bash .gitlab/ci/tests/chart-package.test.sh
+    - bash .gitlab/ci/tests/release-config.test.sh
