@@ -122,6 +122,9 @@ tests/infra/store-bootstrap.sh   # Secret, REST 200/401, COD, D1 checkout, no se
   Secrets in the namespace (Kubernetes cannot scope `create` by name). Only the Job's kubectl
   container gets an API token.
 - **Prod:** the Job downloads WooCommerce from wordpress.org, so the cluster needs egress to it.
+- **Reset:** `helm uninstall` keeps the last Job and the Secret `urumi-woo-api`. Delete the Job
+  (`kubectl -n urumi delete job urumi-bootstrap`) before the PVCs: its finished pod still holds
+  the WordPress PVC. A stale Secret is fine; the next run replaces its password.
 
 ## License
 
