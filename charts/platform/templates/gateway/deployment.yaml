@@ -64,6 +64,8 @@ spec:
             {{- end }}
             {{- if .Values.wooMcp.enabled }}
             # The internal woo-mcp upstream (W3) and the header secret it requires.
+            - name: UPSTREAM_ALLOWED_HOSTS
+              value: {{ .Values.gateway.upstreamAllowedHosts | default (printf "*.%s.svc.cluster.local" .Release.Namespace) | quote }}
             - name: WOO_MCP_URL
               value: {{ include "platform.wooMcpUrl" . | quote }}
             - name: WOO_MCP_SHARED_SECRET

@@ -103,7 +103,7 @@ run_probe() {
   }
 }
 EOF
-  for i in $(seq 1 90); do
+  for _ in $(seq 1 90); do
     phase=$(kc -n "$NAMESPACE" get pod "$name" -o jsonpath='{.status.phase}' 2>/dev/null || true)
     case "$phase" in Succeeded | Failed) break ;; esac
     sleep 2

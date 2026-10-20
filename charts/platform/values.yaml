@@ -185,6 +185,9 @@ wooMcp:
 # MCP gateway + admin API. Runs migrations and seeds the first admin on start.
 gateway:
   enabled: true
+  # Hosts the SSRF guard lets the gateway reach on private IPs (comma-separated, exact or *.suffix).
+  # Empty = in-cluster services of this namespace only: *.<namespace>.svc.cluster.local
+  upstreamAllowedHosts: ''
   image:
     repository: registry.gitlab.com/<group>/<project>/gateway
     # Empty = the chart's appVersion.
