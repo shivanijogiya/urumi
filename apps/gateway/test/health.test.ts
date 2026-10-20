@@ -5,6 +5,7 @@ import { MCP_TIMEOUTS } from '@urumi/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GatewayError } from '../src/core/call-tool.js';
 import { HealthMonitor } from '../src/core/health.js';
+import { TERMINATE_TIMEOUT_MS } from '../src/mcp-client/upstream-client.js';
 import { findUpstreamRow } from '../src/upstreams/repo.js';
 import { ADMIN, setupApp, type TestApp } from './helpers/app.js';
 import { deadUrl, startFakeUpstream, type FakeUpstream } from './helpers/fake-upstream.js';
@@ -175,5 +176,53 @@ describe('loop', () => {
     const checkedAt = (await row(id)).last_checked_at!.getTime();
     await new Promise((r) => setTimeout(r, 200));
     expect((await row(id)).last_checked_at!.getTime()).toBe(checkedAt);
+  });
+});
+
+describe('stateful upstream sessions', () => {
+  it('terminates the MCP session after every health check (no sessions pile up)', async () => {
+    const a = await startFakeUpstream({ identity: 'server-a', stateful: true });
+    fakes.push(a);
+    const id = await addUpstream('a', a.url);
+    const N = 5;
+    for (let i = 1; i <= N; i++) {
+      await monitor.tick();
+      expect(a.liveSessions(), `after check ${i}`).toBe(0);
+    }
+    expect((await row(id)).status).toBe('up');
+    const deletes = a.requests.filter((r) => r.method === 'DELETE');
+    expect(deletes).toHaveLength(N);
+    expect(new Set(deletes.map((r) => r.headers['mcp-session-id'])).size).toBe(N);
+  });
+
+  it('terminates the session after a tool call too', async () => {
+    const a = await startFakeUpstream({ identity: 'server-a', stateful: true });
+    fakes.push(a);
+    await addUpstream('a', a.url);
+    await monitor.tick();
+    await t.app.tools.callTool(adminId, 'a__search', { q: 'x' }, { source: 'chat' });
+    expect(a.calls).toHaveLength(1);
+    expect(a.liveSessions()).toBe(0);
+  });
+
+  it('bounds the DELETE: an upstream that never answers it delays a check by about 1 s', async () => {
+    const a = await startFakeUpstream({ identity: 'server-a', stateful: true, deleteHangs: true });
+    fakes.push(a);
+    const id = await addUpstream('a', a.url);
+    const started = Date.now();
+    await monitor.tick();
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(TERMINATE_TIMEOUT_MS - 50);
+    expect(elapsed).toBeLessThan(TERMINATE_TIMEOUT_MS + 1500);
+    expect(await row(id)).toMatchObject({ status: 'up', last_error: null });
+    expect(a.requests.filter((r) => r.method === 'DELETE')).toHaveLength(1);
+  });
+
+  it('sends no DELETE to a stateless upstream (it has no session id)', async () => {
+    const a = await startFakeUpstream({ identity: 'server-a' });
+    fakes.push(a);
+    await addUpstream('a', a.url);
+    await monitor.tick();
+    expect(a.requests.filter((r) => r.method === 'DELETE')).toHaveLength(0);
   });
 });

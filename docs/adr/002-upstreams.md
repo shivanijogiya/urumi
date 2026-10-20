@@ -1,7 +1,6 @@
 # ADR 002 — Upstreams 2 and 3: server-everything and GitLab MCP
 
-Status: proposed (needs Aadi's G3 approval: new workload, NetworkPolicy, values) · Issue #17 ·
-Requirements G6, D4, D7
+Status: Accepted · Issue #17 · Requirements G6, D4, D7
 
 ## Context
 

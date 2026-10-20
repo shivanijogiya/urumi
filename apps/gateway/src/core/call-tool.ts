@@ -11,7 +11,11 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { FastifyBaseLogger } from 'fastify';
 import type pg from 'pg';
 import { HttpError } from '../http/errors.js';
-import { UpstreamError, type UpstreamClient } from '../mcp-client/upstream-client.js';
+import {
+  ResultTooLargeError,
+  UpstreamError,
+  type UpstreamClient,
+} from '../mcp-client/upstream-client.js';
 import { findUpstreamBySlug } from '../upstreams/repo.js';
 import { jsonBytes, MAX_RESULT_BYTES } from './limits.js';
 import { isListable, type RegisteredTool, type ToolRegistry } from './registry.js';
@@ -152,11 +156,20 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       }
       const { row, tool } = await resolve(qualifiedName);
       record.tool = tool.originalName.slice(0, MAX_NAME_LEN);
+      const tooLarge = (bytes: number | null) => {
+        deps.log.warn(
+          { upstream: row.slug, tool: tool.name, bytes, max: MAX_RESULT_BYTES },
+          'tool result too large',
+        );
+        return new GatewayError('UPSTREAM_ERROR', 'Tool result too large');
+      };
       let result: CallToolResult;
       try {
         result = await deps.client.callTool(row, tool.originalName, args, callTimeoutMs);
       } catch (err) {
         if (!(err instanceof UpstreamError)) throw err;
+        // Cut off while streaming: the full size is unknown (never read).
+        if (err instanceof ResultTooLargeError) throw tooLarge(null);
         deps.log.warn(
           { upstream: row.slug, tool: tool.name, kind: err.kind, reason: err.detail },
           'tool call failed',
@@ -164,13 +177,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
         throw toGatewayError(err, row.slug);
       }
       const resultBytes = jsonBytes(result);
-      if (resultBytes > MAX_RESULT_BYTES) {
-        deps.log.warn(
-          { upstream: row.slug, tool: tool.name, bytes: resultBytes, max: MAX_RESULT_BYTES },
-          'tool result too large',
-        );
-        throw new GatewayError('UPSTREAM_ERROR', 'Tool result too large');
-      }
+      if (resultBytes > MAX_RESULT_BYTES) throw tooLarge(resultBytes);
       if (result.isError) {
         record.outcome = 'error';
         record.errorCode = 'UPSTREAM_ERROR';
