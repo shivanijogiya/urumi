@@ -39,6 +39,16 @@ postgres:
     size: 5Gi
     storageClass: ''
 
+wooMcp:
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/woo-mcp
+    tag: ''
+    pullPolicy: IfNotPresent
+  # environmentType is `production`: in-cluster HTTP calls must claim HTTPS.
+  forwardedProto: https
+  hostHeader: ''
+
 gateway:
   image:
     # Replace with the project's GitLab container registry path and a released tag.

@@ -10,7 +10,7 @@ metadata:
 # No automatic token anywhere: the Job projects one into its kubectl container only.
 automountServiceAccountToken: false
 ---
-# Namespace-scoped: the Job may only manage the one Secret it owns.
+# Namespace-scoped: the Job may only manage the one Secret it owns (and scale/restart woo-mcp).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -28,6 +28,14 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
+  {{- if .Values.wooMcp.enabled }}
+  # Start woo-mcp once its credentials exist (scale 0 -> 1) and restart it after a new
+  # Application Password. Only that one Deployment.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    resourceNames: [{{ include "platform.componentName" (dict "ctx" $ "component" "woo-mcp") | quote }}]
+    verbs: ["get", "patch", "update"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

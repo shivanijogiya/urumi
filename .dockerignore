@@ -4,8 +4,8 @@
 **/coverage
 .git
 .hermes
-.env
-.env.*
+.env*
+**/.env*
 *.log
 .DS_Store
 charts

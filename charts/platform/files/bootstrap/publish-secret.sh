@@ -4,6 +4,8 @@
 #      Application Password from the `wp` step if it made one, else the existing one
 #   2. checks the stored password: GET $WOO_URL/wp-json/wc/v3/orders must return 200, else the
 #      Job fails
+#   3. if $WOO_MCP_DEPLOYMENT is set: scales it 0 -> 1 (fresh install), or restarts it when step 1
+#      stored a new password
 # The password never appears in argv or output: kubectl reads it with --from-file, curl reads its
 # credentials as a config on stdin.
 set -euo pipefail
@@ -63,3 +65,17 @@ for _ in 1 2 3 4 5; do
 done
 [ "$status" = 200 ] || die "GET /wp-json/wc/v3/orders returned HTTP $status (want 200)"
 say "PASS: GET /wp-json/wc/v3/orders returned HTTP 200 for $WOO_USER"
+
+# woo-mcp reads the Secret through env vars, resolved when its container starts. On a fresh
+# install the chart renders it with 0 replicas (the Secret did not exist yet): start it now. If
+# this run made a new Application Password, restart it so it stops using the revoked one.
+if [ -n "${WOO_MCP_DEPLOYMENT:-}" ]; then
+  replicas=$(kubectl get deployment "$WOO_MCP_DEPLOYMENT" -o jsonpath='{.spec.replicas}')
+  if [ "$replicas" = 0 ]; then
+    say "Scaling deployment/$WOO_MCP_DEPLOYMENT to 1 (its credentials now exist)"
+    kubectl scale deployment "$WOO_MCP_DEPLOYMENT" --replicas=1
+  elif [ "$password_file" = "$NEW_PASSWORD_FILE" ]; then
+    say "Restarting deployment/$WOO_MCP_DEPLOYMENT to load the new Application Password"
+    kubectl rollout restart deployment "$WOO_MCP_DEPLOYMENT"
+  fi
+fi

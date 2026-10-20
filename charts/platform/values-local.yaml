@@ -34,6 +34,16 @@ postgres:
     size: 1Gi
     storageClass: local-path
 
+wooMcp:
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-woo-mcp
+    tag: dev
+    pullPolicy: Always
+  # bootstrap.environmentType is `local`: Application Passwords work over plain HTTP.
+  forwardedProto: ''
+  hostHeader: ''
+
 gateway:
   image:
     # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.

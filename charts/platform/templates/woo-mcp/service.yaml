@@ -1,0 +1,18 @@
+{{- if .Values.wooMcp.enabled }}
+{{- $ctx := dict "ctx" $ "component" "woo-mcp" }}
+# Internal only (W3): ClusterIP, and deliberately no Ingress. Only the gateway calls it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{{- end }}
