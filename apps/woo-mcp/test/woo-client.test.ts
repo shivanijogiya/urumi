@@ -88,6 +88,51 @@ describe('createWooClient', () => {
     expect(putInit.method).toBe('PUT');
   });
 
+  it('exposes response headers with getWithHeaders', async () => {
+    const res = new Response(JSON.stringify([{ id: 1 }]), {
+      status: 200,
+      headers: { 'content-type': 'application/json', 'x-wp-total': '42' },
+    });
+    const fetchImpl = fetchReturning(res);
+    const result = await createWooClient(config, fetchImpl).getWithHeaders('/products', {
+      page: 2,
+    });
+
+    expect(result.body).toEqual([{ id: 1 }]);
+    expect(result.headers.get('x-wp-total')).toBe('42');
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe(`${BASE}/wp-json/wc/v3/products?page=2`);
+    expect(init.method).toBe('GET');
+  });
+
+  it('passes a known WooCommerce 400 code through in a safe message', async () => {
+    const upstream = {
+      code: 'product_invalid_sku',
+      message: `Invalid or duplicated SKU. ${BASE} mcp-bot:${PASSWORD}`,
+      data: { status: 400, resource_id: 12 },
+    };
+    const err = await caught(
+      createWooClient(config, fetchReturning(json(upstream, 400))).post('/products', {}),
+    );
+    expect(err.code).toBe('VALIDATION_FAILED');
+    expect(err.status).toBe(400);
+    expect(err.message).toContain('product_invalid_sku');
+    expect(err.message).not.toContain('Invalid or duplicated');
+    expectSafe(err);
+  });
+
+  it.each([
+    ['an unknown code', { code: 'some_plugin_code_with_secret_abc' }],
+    ['a non-string code', { code: { nested: true } }],
+    ['no code', { message: 'oops' }],
+    ['a non-JSON body', `<html>${BASE}</html>`],
+  ])('keeps the generic 400 message for %s', async (_label, body) => {
+    const res = typeof body === 'string' ? new Response(body, { status: 400 }) : json(body, 400);
+    const err = await caught(createWooClient(config, fetchReturning(res)).post('/products', {}));
+    expect(err.code).toBe('VALIDATION_FAILED');
+    expect(err.message).toBe('WooCommerce rejected the request as invalid');
+  });
+
   it('rejects paths that could escape the API base', async () => {
     const fetchImpl = fetchReturning(json({}));
     const client = createWooClient(config, fetchImpl);

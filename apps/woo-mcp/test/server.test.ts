@@ -22,6 +22,9 @@ const unusedClient: WooClient = {
   get: async () => {
     throw new Error('not expected');
   },
+  getWithHeaders: async () => {
+    throw new Error('not expected');
+  },
   post: async () => {
     throw new Error('not expected');
   },
@@ -228,8 +231,8 @@ describe('auth and routing', () => {
 });
 
 describe('MCP over Streamable HTTP', () => {
-  it('lists no tools yet', async () => {
-    const base = await start();
+  it('lists no tools when given an empty tool list', async () => {
+    const base = await start([]);
     const client = await connect(base);
     const { tools } = await client.listTools();
     expect(tools).toEqual([]);

@@ -14,6 +14,8 @@ export type Query = Record<string, string | number | boolean | undefined>;
 
 export interface WooClient {
   get(path: string, query?: Query): Promise<unknown>;
+  /** Like `get`, plus the response headers (e.g. `X-WP-Total` on list endpoints). */
+  getWithHeaders(path: string, query?: Query): Promise<{ body: unknown; headers: Headers }>;
   post(path: string, body: unknown): Promise<unknown>;
   put(path: string, body: unknown): Promise<unknown>;
 }
@@ -30,9 +32,25 @@ export class WooError extends Error {
   }
 }
 
-function errorForStatus(status: number): WooError {
+/**
+ * WooCommerce 400 codes that are safe and useful to pass on. Only the code is ever forwarded, never
+ * Woo's message or data: those can echo input, internal ids, or plugin text.
+ */
+const PASSTHROUGH_400_CODES = new Set([
+  'product_invalid_sku',
+  'rest_invalid_param',
+  'rest_missing_callback_param',
+]);
+const ERROR_BODY_MAX_BYTES = 64 * 1024;
+
+function errorForStatus(status: number, wooCode?: string): WooError {
   if (status === 400) {
-    return new WooError('VALIDATION_FAILED', 'WooCommerce rejected the request as invalid', status);
+    const message = 'WooCommerce rejected the request as invalid';
+    return new WooError(
+      'VALIDATION_FAILED',
+      wooCode && PASSTHROUGH_400_CODES.has(wooCode) ? `${message} (${wooCode})` : message,
+      status,
+    );
   }
   if (status === 401 || status === 403) {
     return new WooError('UPSTREAM_ERROR', 'WooCommerce rejected the server credentials', status);
@@ -49,10 +67,10 @@ function errorForStatus(status: number): WooError {
   return new WooError('UPSTREAM_ERROR', 'WooCommerce refused the request', status);
 }
 
-async function readCapped(res: Response): Promise<string> {
+async function readCapped(res: Response, maxBytes = WOO_MAX_RESPONSE_BYTES): Promise<string> {
   const declared = Number(res.headers.get('content-length'));
   const tooLarge = () => new WooError('UPSTREAM_ERROR', 'WooCommerce response too large');
-  if (declared > WOO_MAX_RESPONSE_BYTES) {
+  if (declared > maxBytes) {
     await res.body?.cancel();
     throw tooLarge();
   }
@@ -64,13 +82,24 @@ async function readCapped(res: Response): Promise<string> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > WOO_MAX_RESPONSE_BYTES) {
+    if (size > maxBytes) {
       await reader.cancel();
       throw tooLarge();
     }
     chunks.push(value);
   }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** The `code` field of a WooCommerce error body, if it has one. Never throws. */
+async function wooErrorCode(res: Response): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readCapped(res, ERROR_BODY_MAX_BYTES));
+    const code = (parsed as { code?: unknown } | null)?.code;
+    return typeof code === 'string' ? code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createWooClient(
@@ -92,6 +121,7 @@ export function createWooClient(
 
     const signal = AbortSignal.timeout(timeoutMs);
     let text: string;
+    let resHeaders: Headers;
     try {
       const res = await fetchImpl(url.toString(), {
         method,
@@ -101,9 +131,11 @@ export function createWooClient(
         redirect: 'manual',
       });
       if (!res.ok) {
+        if (res.status === 400) throw errorForStatus(400, await wooErrorCode(res));
         await res.body?.cancel().catch(() => {});
         throw errorForStatus(res.status);
       }
+      resHeaders = res.headers;
       text = await readCapped(res);
     } catch (e) {
       if (e instanceof WooError) throw e;
@@ -113,18 +145,20 @@ export function createWooClient(
       }
       throw new WooError('UPSTREAM_UNREACHABLE', 'WooCommerce is unreachable');
     }
-    if (text.trim() === '') return null;
+    if (text.trim() === '') return { body: null, headers: resHeaders };
     try {
-      return JSON.parse(text) as unknown;
+      return { body: JSON.parse(text) as unknown, headers: resHeaders };
     } catch {
       throw new WooError('UPSTREAM_ERROR', 'WooCommerce returned an invalid response');
     }
   }
 
+  const bodyOf = async (p: Promise<{ body: unknown }>) => (await p).body;
   return {
-    get: (path, query) => request('GET', path, query),
-    post: (path, body) => request('POST', path, undefined, body),
-    put: (path, body) => request('PUT', path, undefined, body),
+    get: (path, query) => bodyOf(request('GET', path, query)),
+    getWithHeaders: (path, query) => request('GET', path, query),
+    post: (path, body) => bodyOf(request('POST', path, undefined, body)),
+    put: (path, body) => bodyOf(request('PUT', path, undefined, body)),
   };
 }
 
