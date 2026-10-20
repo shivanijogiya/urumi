@@ -1,0 +1,42 @@
+{{- if .Values.gateway.enabled }}
+{{- $ctx := dict "ctx" $ "component" "app" }}
+{{- $gateway := include "platform.componentName" (dict "ctx" $ "component" "gateway") }}
+# The team app host (K5): the gateway's admin/chat API and MCP endpoint, plus the dashboard at /
+# when dashboard.enabled. Longest prefix wins, so /api and /mcp never reach the dashboard.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.app.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.app.host | quote }}
+      secretName: {{ required "app.tls.secretName is required when app.tls.enabled" .Values.app.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.app.host | quote }}
+      http:
+        paths:
+          {{- range list "/api" "/mcp" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gateway }}
+                port:
+                  name: http
+          {{- end }}
+          {{- if .Values.dashboard.enabled }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "platform.componentName" (dict "ctx" $ "component" "dashboard") }}
+                port:
+                  name: http
+          {{- end }}
+{{- end }}

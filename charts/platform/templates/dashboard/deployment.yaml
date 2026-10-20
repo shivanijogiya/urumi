@@ -1,0 +1,66 @@
+{{- if .Values.dashboard.enabled }}
+{{- $ctx := dict "ctx" $ "component" "dashboard" }}
+{{- $v := .Values.dashboard }}
+# Static React build served by nginx-unprivileged on 8080. Stateless: no Secret, no API calls of
+# its own (the browser calls /api on the same host through the app Ingress).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # nginx user of the nginx-unprivileged image.
+        runAsUser: 101
+        runAsGroup: 101
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: "{{ $v.image.repository }}:{{ $v.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $v.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read-only; nginx writes its pid and temp files under /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+{{- end }}

@@ -1,6 +1,6 @@
 {{- if .Values.gateway.enabled }}
 {{- $ctx := dict "ctx" $ "component" "gateway" }}
-# ClusterIP only for now; the app Ingress comes with the dashboard.
+# ClusterIP; reached from outside through the app Ingress (templates/app/ingress.yaml).
 apiVersion: v1
 kind: Service
 metadata:

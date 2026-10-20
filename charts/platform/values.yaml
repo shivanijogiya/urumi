@@ -27,6 +27,31 @@ store:
     # TLS Secret for the host (e.g. issued by cert-manager); not created by this chart.
     secretName: ''
 
+# Team app (K5): one Ingress host. /api and /mcp go to the gateway, / to the dashboard (only when
+# dashboard.enabled). gateway.publicOrigin must be this host's origin (CSRF check).
+app:
+  host: app.localtest.me
+  tls:
+    enabled: false
+    # TLS Secret for the host (e.g. issued by cert-manager); not created by this chart.
+    secretName: ''
+
+# React dashboard, static files served by nginx-unprivileged on 8080 (/healthz for probes).
+dashboard:
+  enabled: false
+  image:
+    repository: registry.gitlab.com/<group>/<project>/dashboard
+    # Empty = the chart's appVersion.
+    tag: ''
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 mariadb:
   enabled: true
   image:
@@ -222,6 +247,11 @@ gateway:
   publicOrigin: http://app.localtest.me
   # Mark the session cookie Secure. Turn on when the dashboard is served over HTTPS.
   cookieSecure: false
+  # Chat agent (C3): Claude model id (CHAT_MODEL) and the key inside `secretName` holding the
+  # Anthropic API key. The key is optional: if it is missing, the gateway starts and /api/chat
+  # answers 503. Chat needs egress to api.anthropic.com:443.
+  chatModel: claude-sonnet-5-5
+  chatSecretKey: ANTHROPIC_API_KEY
   # Env var -> key inside `secretName`. The DB password comes from postgres.secretKeys.password.
   secretKeys:
     SEED_ADMIN_EMAIL: SEED_ADMIN_EMAIL

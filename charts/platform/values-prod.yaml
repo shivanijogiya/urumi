@@ -16,6 +16,21 @@ store:
     enabled: false
     secretName: store-tls
 
+app:
+  host: app.example.com
+  # Enable once a certificate exists for the host (gateway.publicOrigin is already https).
+  tls:
+    enabled: false
+    secretName: app-tls
+
+dashboard:
+  enabled: true
+  image:
+    # Replace with the project's GitLab container registry path and a released tag.
+    repository: registry.gitlab.com/<group>/<project>/dashboard
+    tag: ''
+    pullPolicy: IfNotPresent
+
 mariadb:
   persistence:
     size: 5Gi
@@ -66,3 +81,4 @@ gateway:
   # Replace with the dashboard's HTTPS origin.
   publicOrigin: https://app.example.com
   cookieSecure: true
+  chatModel: claude-sonnet-5-5

@@ -13,6 +13,20 @@ store:
   tls:
     enabled: false
 
+app:
+  host: app.localtest.me
+  tls:
+    enabled: false
+
+dashboard:
+  # Off until the dashboard image is pushed; the Ingress then has no `/` route.
+  enabled: false
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-dashboard
+    tag: dev
+    pullPolicy: Always
+
 mariadb:
   persistence:
     size: 2Gi
@@ -59,3 +73,6 @@ gateway:
     tag: dev
     # :dev is rebuilt in place; always pull the latest push.
     pullPolicy: Always
+  publicOrigin: http://app.localtest.me
+  cookieSecure: false
+  chatModel: claude-sonnet-5-5
