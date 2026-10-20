@@ -61,9 +61,10 @@ flowchart LR
 | Flows                                   | `.gitlab/flows/incident.yaml`, `risk-gate.yaml`          |
 | Flow policy + rule parity test          | `.gitlab/flows/tests/flows.test.sh`                      |
 
-`release:human-approval` on main is always created, because a dotenv value can't decide whether
-a job exists. It is a no-op (`low risk: no approval needed`) when `RISK=low`, and is skipped
-when the canary failed. On MR pipelines it exists only when the diff touches a high-risk glob,
+`release:human-approval` exists on main only when the push touches a high-risk glob (the same
+globs as `risk.py`, checked by `flows.test.sh`), so low-risk main pipelines stay green. If it
+does run with `RISK=low` it is a no-op (`low risk: no approval needed`), and it is skipped when
+the canary failed. On MR pipelines it exists only when the diff touches a high-risk glob,
 and it approves the merge.
 
 ## Register the flows (Aadi, 5 min)
@@ -116,7 +117,10 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
 
 **(b) Rollback opens an incident.**
 
-1. Open the latest **main** pipeline, then click play on **`canary:bad-release`**.
+1. **Build > Pipelines > Run pipeline** on `main`, with the variable `CANARY_FORCE_BAD` = `1`.
+   The automatic `canary` job injects a 50% error rate into the canary. (Clicking the manual
+   `canary:bad-release` job also produces a ROLLBACK, but it is `allow_failure`, so it does not fail
+   the pipeline or fire the incident flow.)
 2. When the job finishes (it builds a whole cluster, so allow several minutes), its log ends with `CANARY VERDICT: ROLLBACK -> ROLLBACK,
 rolled-back`, the `CANARY_VERDICT_JSON: {...}` line, and `ERROR: RELEASE REJECTED: canary rolled
 back`. The job and the pipeline are **failed**.
@@ -135,8 +139,8 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
   after changes.
 - Triggers fire only on actions that a person started. Pushes, merges, "Run pipeline" and
   clicking a manual job all count. Scheduled pipelines and bot activity don't.
-- Main pipelines show **blocked** until someone runs the manual `canary:bad-release` (and on main
-  `release:human-approval`). Both are manual jobs with `allow_failure: false`. See ADR 004.
+- A high-risk main pipeline shows **blocked** until someone runs `release:human-approval`. That
+  is the gate working. Low-risk main pipelines don't create the job. See ADR 004.
 - A drill always fails its job, even when it worked. Read `DECISION` or the log.
 - The CI cluster is ephemeral. "Promote" is the verdict plus the approval record, not a deploy to
   a long-lived production cluster. Stable and canary come from the same commit, with faults

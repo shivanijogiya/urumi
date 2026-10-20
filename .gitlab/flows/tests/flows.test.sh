@@ -163,7 +163,7 @@ if to_json "$ROOT/.gitlab/ci/canary.gitlab-ci.yml" "$TMP/canary-ci.json"; then
   check "canary fails main on ROLLBACK (not allow_failure on the default branch)" "$TMP/canary-ci.json" \
     '[.canary.rules[] | select(.if | contains("CI_DEFAULT_BRANCH")) | .allow_failure] == [false]
      and [.["canary:bad-release"].rules[] | select(.if | contains("CI_DEFAULT_BRANCH"))
-          | [.when, .allow_failure]] == [["manual", false]]'
+          | [.when, .allow_failure]] == [["manual", true]]'
 else
   bad "canary.gitlab-ci.yml is valid YAML" "$(cat "$TMP/err")"
 fi

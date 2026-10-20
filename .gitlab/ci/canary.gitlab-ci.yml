@@ -88,10 +88,10 @@ canary:
       dotenv: verdict.env
 
 # Forced bad release: same pipeline, the canary carries injected faults. Manual everywhere, so a
-# ROLLBACK lands in the pipeline history on demand (H4). On the default branch it is not
-# allow_failure: clicking it fails main's pipeline, a human-initiated failure, so the incident flow
-# fires (flow triggers ignore pipelines nobody started). Side effect: until someone clicks it, a main
-# pipeline shows "blocked" (a manual job with allow_failure: false); see docs/adr/004-duo-flows.md.
+# ROLLBACK lands in the pipeline history on demand (H4). It is allow_failure everywhere so it never
+# leaves main "blocked". To fail main's pipeline on purpose (the incident-flow drill), a person runs
+# a pipeline on main from the UI with variable CANARY_FORCE_BAD=1: the automatic `canary` job then
+# rolls back and fails the pipeline, a human-initiated failure, so the incident flow fires. ADR 004.
 canary:bad-release:
   extends: canary
   variables:
@@ -102,12 +102,13 @@ canary:bad-release:
       allow_failure: true
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
-      allow_failure: false
+      allow_failure: true
 
 # Human approval of a high-risk release (#24, H3). Manual and not allow_failure, so the pipeline
 # shows "blocked" until a person runs it; scripts/canary/approval.py records who (GITLAB_USER_LOGIN
 # = whoever clicked) and when in approval.json.
-#   default branch: always created (whether a job exists can't depend on a dotenv value); after a
+#   default branch: created only when the push touches a high-risk path (same globs; a low-risk
+#     main pipeline stays green, never "blocked"); after a
 #     canary PROMOTE_PENDING_APPROVAL it approves the promotion, and with RISK=low it is a no-op
 #     ("low risk: no approval needed"). Skipped when canary failed (nothing to approve).
 #   MR pipelines: created only when the diff touches a high-risk path (same globs as risk.py,
@@ -141,6 +142,20 @@ release:human-approval:
       when: manual
       allow_failure: false
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - apps/gateway/src/auth/**/*
+        - apps/gateway/src/keys/**/*
+        - apps/gateway/src/users/**/*
+        - apps/gateway/src/crypto/**/*
+        - apps/gateway/src/http/**/*
+        - apps/gateway/src/mcp/**/*
+        - apps/gateway/src/upstreams/ssrf*
+        - charts/**/networkpolicy*.yaml
+        - charts/**/values*.yaml
+        - charts/**/rbac*
+        - charts/**/secret*
+        - .gitlab-ci.yml
+        - .gitlab/ci/**/*
       when: manual
       allow_failure: false
   script:

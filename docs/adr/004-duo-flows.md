@@ -20,9 +20,10 @@ variables, but a person can run pipelines and jobs from the UI.
 - **A rejected release fails the pipeline.** `scripts/canary/ci.sh` exits 1 with `RELEASE
 REJECTED: canary rolled back` after it applies a rollback, and it also fails on HOLD (as before).
   `canary` is not `allow_failure` on the default branch, so a ROLLBACK there fails main's pipeline.
-  `canary:bad-release` is manual and not `allow_failure` on main, so clicking it is a
-  human-initiated pipeline failure, which is what the trigger needs. MR jobs stay manual and
-  `allow_failure`. ADR 003's "the job succeeds when the decision was applied" no longer holds.
+  The incident drill is "Run pipeline" on main with `CANARY_FORCE_BAD=1`: a human-initiated
+  pipeline whose `canary` job rolls back and fails it, which is what the trigger needs.
+  `canary:bad-release` stays a manual, `allow_failure` job (MR and main) so it never leaves a
+  pipeline blocked. MR canary jobs stay manual and `allow_failure`. ADR 003's "the job succeeds when the decision was applied" no longer holds.
 - **The log is the interface.** ci.sh prints one `CANARY_VERDICT_JSON: {...}` line: verdict.py's
   report plus `decision`, `force_bad`, `risk`, `canary_weight_pct`, a timeline
   (`canary_live_at`, `verdict_at`, `applied_at`) and CI links (`scripts/canary/record.jq`). The
@@ -63,11 +64,12 @@ REJECTED: canary rolled back` after it applies a rollback, and it also fails on 
 
 ## Consequences
 
-- A main pipeline sits in **blocked** until someone runs `canary:bad-release` and/or
-  `release:human-approval`, because both are manual jobs with `allow_failure: false`. That is
-  the price of a one-click, human-initiated drill without CI variables. The alternative is a
-  drill job that exists only in pipelines started with "Run pipeline" (`CI_PIPELINE_SOURCE ==
-"web"`).
+- `release:human-approval` is created on main only for pushes that touch a high-risk glob
+  (`rules:changes`, same globs as risk.py), so only high-risk main pipelines sit in **blocked**,
+  waiting for a person. `rules:changes` can't see dotenv values; `risk.py` stays the recorded
+  classification, and parity of the globs is tested.
+- The incident drill needs a person to start a pipeline with `CANARY_FORCE_BAD=1` (the merge
+  token can't set job variables, which returned 403).
 - A forced bad release always fails its job, even when the drill worked. `DECISION` and the log
   tell the two apart.
 - The CI cluster is ephemeral. "Promote" means the recorded decision plus the approval record,
