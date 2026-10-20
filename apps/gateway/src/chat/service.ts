@@ -23,7 +23,7 @@ import type { RegisteredTool } from '../core/registry.js';
 import { HttpError } from '../http/errors.js';
 import type { AnthropicLike } from './anthropic.js';
 
-export const DEFAULT_CHAT_MODEL = 'claude-sonnet-4-5';
+export const DEFAULT_CHAT_MODEL = 'claude-sonnet-5-5';
 export const CHAT_MAX_TOKENS = 1024;
 export const ANTHROPIC_TIMEOUT_MS = 60_000;
 export const MAX_TOOL_ROUNDS = 8;
@@ -44,7 +44,7 @@ export interface ChatServiceDeps {
   anthropic: AnthropicLike;
   listTools: () => Promise<RegisteredTool[]>;
   callTool: CallTool;
-  /** CHAT_MODEL; default claude-sonnet-4-5. */
+  /** CHAT_MODEL; default claude-sonnet-5-5. */
   model?: string;
 }
 

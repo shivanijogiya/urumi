@@ -390,12 +390,12 @@ describe('what the model is sent', () => {
     expect(system.toLowerCase()).toContain('untrusted');
   });
 
-  it('defaults the model to claude-sonnet-4-5', async () => {
+  it('defaults the model to claude-sonnet-5-5', async () => {
     const fake = new ScriptedAnthropic(() => message([text('hi')]));
     await start({ anthropic: fake });
     await chatOk();
-    expect(DEFAULT_CHAT_MODEL).toBe('claude-sonnet-4-5');
-    expect(fake.requests[0]!.model).toBe('claude-sonnet-4-5');
+    expect(DEFAULT_CHAT_MODEL).toBe('claude-sonnet-5-5');
+    expect(fake.requests[0]!.model).toBe('claude-sonnet-5-5');
   });
 
   it('replays the browser history as given', async () => {

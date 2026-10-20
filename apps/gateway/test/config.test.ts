@@ -112,12 +112,12 @@ describe('loadConfig', () => {
   it('chat: ANTHROPIC_API_KEY optional (null when unset or empty), CHAT_MODEL defaulted', () => {
     expect(loadConfig(valid)).toMatchObject({
       anthropicApiKey: null,
-      chatModel: 'claude-sonnet-4-5',
+      chatModel: 'claude-sonnet-5-5',
     });
     expect(loadConfig({ ...valid, ANTHROPIC_API_KEY: '' }).anthropicApiKey).toBeNull();
     const c = loadConfig({ ...valid, ANTHROPIC_API_KEY: 'sk-ant-x', CHAT_MODEL: 'claude-x-1' });
     expect(c).toMatchObject({ anthropicApiKey: 'sk-ant-x', chatModel: 'claude-x-1' });
-    expect(loadConfig({ ...valid, CHAT_MODEL: '' }).chatModel).toBe('claude-sonnet-4-5');
+    expect(loadConfig({ ...valid, CHAT_MODEL: '' }).chatModel).toBe('claude-sonnet-5-5');
     expect(errorFor({ ...valid, CHAT_MODEL: 'bad model' }).message).toContain('CHAT_MODEL');
   });
 
