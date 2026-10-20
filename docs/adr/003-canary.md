@@ -1,7 +1,8 @@
 # ADR 003 — Canary deploy of the gateway and verdict.py
 
 Status: proposed (needs Aadi's G3 approval: new workload, IngressRoute, NetworkPolicy and values
-changes) · Issue #23 · Requirement H2
+changes) · Issue #23 · Requirement H2 · Amended by ADR 004 (#24): a ROLLBACK now fails the job,
+and a high-risk PROMOTE waits for `release:human-approval`
 
 ## Context
 
