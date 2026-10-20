@@ -119,8 +119,9 @@ tests/infra/store-bootstrap.sh   # Secret, REST 200/401, COD, D1 checkout, no se
   in prod). In prod, in-cluster plain-HTTP calls to `WOO_URL` must send
   `X-Forwarded-Proto: https` (the Job does).
 - **RBAC:** the Job's ServiceAccount may `get/patch/update` only `urumi-woo-api`, plus `create`
-  Secrets in the namespace (Kubernetes cannot scope `create` by name). Only the Job's kubectl
-  container gets an API token.
+  Secrets in the namespace (Kubernetes cannot scope `create` by name), plus `get/patch/update`
+  the `urumi-woo-mcp` Deployment and its scale (to start/restart it, see below). Only the Job's
+  kubectl container gets an API token.
 - **Prod:** the Job downloads WooCommerce from wordpress.org, so the cluster needs egress to it.
 - **Reset:** `helm uninstall` keeps the last Job and the Secret `urumi-woo-api`. Delete the Job
   (`kubectl -n urumi delete job urumi-bootstrap`) before the PVCs: its finished pod still holds
@@ -142,3 +143,26 @@ tests/infra/gateway-db.sh                  # migrations, seed admin, persistence
 ```
 
 Gateway tests use a throwaway Docker Postgres locally, or `TEST_DATABASE_URL` (CI uses a `postgres:16-alpine` service).
+
+### woo-mcp
+
+The WooCommerce MCP server (`wooMcp.enabled`) is internal only: a ClusterIP Service
+`urumi-woo-mcp` (port 80 → 8080), **no Ingress**, and a NetworkPolicy that admits only this
+release's gateway pods on 8080. It reads `WOO_URL` / `WOO_USER` / `WOO_APP_PASSWORD` from
+`urumi-woo-api` and `WOO_MCP_SHARED_SECRET` from `urumi-env`. The gateway gets `WOO_MCP_URL`
+(`http://urumi-woo-mcp.<ns>.svc.cluster.local/mcp`) and the same shared secret.
+
+- **Fresh install:** `helm install --wait` waits for every Deployment to be Ready _before_ the
+  post-install bootstrap hook writes `urumi-woo-api`, so woo-mcp cannot wait for that Secret
+  without deadlocking the install. The chart therefore renders woo-mcp with 0 replicas while the
+  Secret does not exist (`lookup`), and the bootstrap Job scales it to 1 once the Secret is
+  published. Upgrades find the Secret and render 1. If the Job ever has to create a new
+  Application Password it restarts woo-mcp so it picks the new one up.
+- **Out-of-band credentials** (`bootstrap.enabled: false`): create `urumi-woo-api` first, then
+  install/upgrade.
+
+```sh
+scripts/build-images.sh woo-mcp gateway
+helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
+tests/infra/woo-mcp-netpol.sh   # ClusterIP + no Ingress, unlabelled pod blocked, gateway allowed
+```
