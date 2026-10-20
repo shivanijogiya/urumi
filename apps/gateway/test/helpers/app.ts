@@ -1,4 +1,5 @@
 // A real gateway app on a fresh, migrated, seeded database. Only `app.inject` is used: no sockets.
+import { randomBytes } from 'node:crypto';
 import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { SESSION_COOKIE } from '@urumi/contracts';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
@@ -11,6 +12,8 @@ import { freshDatabase } from './db.js';
 
 export const ADMIN = { email: 'admin@example.com', password: 'first-admin-password' };
 export const PUBLIC_ORIGIN = 'http://app.localtest.me';
+/** GATEWAY_ENC_KEY for test apps; random per test run. */
+export const ENC_KEY = randomBytes(32);
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
@@ -36,7 +39,7 @@ export async function setupApp(deps: Partial<AppDeps> = {}): Promise<TestApp> {
   const pool = createPool(await freshDatabase());
   await migrate(pool, MIGRATIONS_DIR);
   await seedAdmin(pool, ADMIN);
-  const app = buildApp({ pool, publicOrigin: PUBLIC_ORIGIN, ...deps });
+  const app = buildApp({ pool, publicOrigin: PUBLIC_ORIGIN, encKey: ENC_KEY, ...deps });
   await app.ready();
 
   const request: TestApp['request'] = (method, url, opts = {}) =>

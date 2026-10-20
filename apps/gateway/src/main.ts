@@ -28,6 +28,8 @@ async function main(): Promise<void> {
     publicOrigin: config.publicOrigin,
     cookieSecure: config.cookieSecure,
     trustProxy: config.trustProxy,
+    encKey: config.encKey,
+    upstreamAllowedHosts: config.upstreamAllowedHosts,
   });
 
   const shutdown = async (signal: string) => {

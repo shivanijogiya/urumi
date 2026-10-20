@@ -6,6 +6,8 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
+import { registerUpstreamRoutes } from './upstreams/routes.js';
+import type { LookupFn } from './upstreams/ssrf.js';
 import { registerUserRoutes } from './users/routes.js';
 
 export const READY_TIMEOUT_MS = 1000;
@@ -23,9 +25,18 @@ export interface AppDeps {
    * false (direct connections, tests); main.ts passes TRUST_PROXY.
    */
   trustProxy?: boolean | number;
+  /** GATEWAY_ENC_KEY: AES-256-GCM key for upstream credentials. */
+  encKey: Buffer;
+  /** UPSTREAM_ALLOWED_HOSTS (normalised): hosts exempt from the SSRF address check. Default none. */
+  upstreamAllowedHosts?: readonly string[];
+  /** DNS resolver for the SSRF guard; tests inject a stub. Default: the system resolver. */
+  lookup?: LookupFn;
 }
 
-/** JSON logs; credentials in headers are never written. */
+/**
+ * JSON logs; credentials in headers are never written. Request bodies are not logged; an upstream
+ * `credential` is censored anyway should one ever end up in a log object.
+ */
 export const LOGGER_OPTIONS = {
   level: 'info',
   redact: {
@@ -35,6 +46,9 @@ export const LOGGER_OPTIONS = {
       'res.headers["set-cookie"]',
       'headers.authorization',
       'headers.cookie',
+      'credential',
+      '*.credential',
+      'req.body.credential',
     ],
     censor: '[redacted]',
   },
@@ -99,6 +113,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   registerUserRoutes(app);
   registerKeyRoutes(app);
+  registerUpstreamRoutes(app, {
+    encKey: deps.encKey,
+    allowedHosts: deps.upstreamAllowedHosts ?? [],
+    ...(deps.lookup ? { lookup: deps.lookup } : {}),
+  });
 
   return app;
 }

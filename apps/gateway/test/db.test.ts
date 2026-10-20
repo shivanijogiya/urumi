@@ -1,4 +1,5 @@
 // Integration tests against a real Postgres (see global-setup.ts). Each test uses its own database.
+import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { ErrorEnvelopeSchema } from '@urumi/contracts';
@@ -14,6 +15,7 @@ import { freshDatabase } from './helpers/db.js';
 
 const TABLES = ['api_keys', 'audit_log', 'sessions', 'upstreams', 'users'];
 const ADMIN = { email: 'admin@example.com', password: 'first-admin-password' };
+const encKey = randomBytes(32);
 
 const pools: pg.Pool[] = [];
 function pool(db: DbConfig): pg.Pool {
@@ -138,7 +140,7 @@ describe('health endpoints', () => {
   }
 
   it('/healthz is 200 and /readyz is 200 when the database answers', async () => {
-    const app = buildApp({ pool: pool(await freshDatabase()) });
+    const app = buildApp({ pool: pool(await freshDatabase()), encKey });
     try {
       expect((await app.inject({ url: '/healthz' })).statusCode).toBe(200);
       const ready = await app.inject({ url: '/readyz' });
@@ -157,6 +159,7 @@ describe('health endpoints', () => {
         password: 'y',
         database: 'z',
       }),
+      encKey,
     });
     try {
       const started = Date.now();
@@ -174,7 +177,7 @@ describe('health endpoints', () => {
   });
 
   it('unknown routes get the error envelope', async () => {
-    const app = buildApp({ pool: pool(await freshDatabase()) });
+    const app = buildApp({ pool: pool(await freshDatabase()), encKey });
     try {
       const res = await app.inject({ url: '/nope' });
       expect(res.statusCode).toBe(404);
