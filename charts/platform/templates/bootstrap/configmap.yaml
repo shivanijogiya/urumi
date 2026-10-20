@@ -1,0 +1,15 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $ctx := dict "ctx" $ "component" "bootstrap" }}
+# Scripts live in files/bootstrap/ as plain files (shellcheck-able, no template escaping).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/bootstrap/*" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,7 +1,6 @@
 {{- if .Values.wordpress.enabled }}
 {{- $ctx := dict "ctx" $ "component" "wordpress" }}
 {{- $v := .Values.wordpress }}
-{{- $url := include "platform.storeUrl" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,22 +36,7 @@ spec:
             - name: http
               containerPort: 80
           env:
-            - name: WORDPRESS_DB_HOST
-              value: {{ include "platform.wordpressDbHost" . | quote }}
-            - name: WORDPRESS_DB_NAME
-              value: {{ .Values.mariadb.database | quote }}
-            - name: WORDPRESS_DB_USER
-              value: {{ .Values.mariadb.user | quote }}
-            - name: WORDPRESS_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secretName }}
-                  key: {{ .Values.mariadb.secretKeys.password }}
-            # Pin the public URL so WordPress never builds links from the request's Host header.
-            - name: WORDPRESS_CONFIG_EXTRA
-              value: |
-                define('WP_HOME', {{ $url | squote }});
-                define('WP_SITEURL', {{ $url | squote }});
+            {{- include "platform.wordpressEnv" . | nindent 12 }}
           # A static core file: served before WordPress is installed, needs no DB, no redirect.
           startupProbe:
             httpGet:

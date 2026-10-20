@@ -26,3 +26,10 @@ wordpress:
   persistence:
     size: 5Gi
     storageClass: ''
+
+bootstrap:
+  enabled: true
+  # Served over HTTPS; see values.yaml for in-cluster HTTP calls (X-Forwarded-Proto).
+  environmentType: production
+  storeTitle: Urumi Store
+  # The Job downloads WooCommerce from wordpress.org: the cluster needs egress to it.

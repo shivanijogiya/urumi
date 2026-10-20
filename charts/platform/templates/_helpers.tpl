@@ -51,3 +51,39 @@ helm.sh/chart: {{ printf "%s-%s" .ctx.Chart.Name .ctx.Chart.Version | replace "+
 {{- define "platform.wordpressDbHost" -}}
 {{- default (printf "%s:3306" (include "platform.componentName" (dict "ctx" . "component" "mariadb"))) .Values.wordpress.databaseHost }}
 {{- end }}
+
+{{/*
+Env that the official image's wp-config.php reads (DB connection + WORDPRESS_CONFIG_EXTRA).
+Shared by the WordPress Deployment and the bootstrap Job's WP-CLI container so both see the
+same site. Usage: include "platform.wordpressEnv" . | nindent 12
+*/}}
+{{- define "platform.wordpressEnv" -}}
+{{- $url := include "platform.storeUrl" . -}}
+- name: WORDPRESS_DB_HOST
+  value: {{ include "platform.wordpressDbHost" . | quote }}
+- name: WORDPRESS_DB_NAME
+  value: {{ .Values.mariadb.database | quote }}
+- name: WORDPRESS_DB_USER
+  value: {{ .Values.mariadb.user | quote }}
+- name: WORDPRESS_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secretName }}
+      key: {{ .Values.mariadb.secretKeys.password }}
+# Pin the public URL so WordPress never builds links from the request's Host header.
+# Application Passwords need HTTPS unless the environment type is `local`.
+- name: WORDPRESS_CONFIG_EXTRA
+  value: |
+    define('WP_HOME', {{ $url | squote }});
+    define('WP_SITEURL', {{ $url | squote }});
+    define('WP_ENVIRONMENT_TYPE', {{ .Values.bootstrap.environmentType | squote }});
+{{- end }}
+
+{{/* Base URL the gateway side uses for the WooCommerce REST API: bootstrap.wooUrl, else the in-cluster WordPress Service. */}}
+{{- define "platform.wooUrl" -}}
+{{- if .Values.bootstrap.wooUrl }}
+{{- .Values.bootstrap.wooUrl | trimSuffix "/" }}
+{{- else }}
+{{- printf "http://%s.%s.svc.cluster.local" (include "platform.componentName" (dict "ctx" . "component" "wordpress")) .Release.Namespace }}
+{{- end }}
+{{- end }}

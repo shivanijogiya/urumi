@@ -22,3 +22,9 @@ wordpress:
   persistence:
     size: 2Gi
     storageClass: local-path
+
+bootstrap:
+  enabled: true
+  # Plain HTTP locally: Application Passwords need `local` (or HTTPS).
+  environmentType: local
+  storeTitle: Urumi Store (local)
