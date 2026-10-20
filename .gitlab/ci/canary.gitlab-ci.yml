@@ -4,8 +4,9 @@
 # roll back. All logic lives in scripts/canary/ci.sh. No external secrets: .env.local is generated.
 #
 # The job succeeds when the decision was applied (PROMOTE -> promoted, ROLLBACK -> rolled back) and
-# fails on HOLD. Run a pipeline with CANARY_FORCE_BAD=1 to inject a 50 % tools/call error rate into
-# the canary: the job then must end in ROLLBACK. Artifacts: verdict.json, dotenv VERDICT=...
+# fails on HOLD. `canary:bad-release` is the same job with CANARY_FORCE_BAD=1: a 50 % tools/call error
+# rate is injected into the canary and the job must end in ROLLBACK (a one-click drill that leaves a
+# ROLLBACK in the pipeline history; no CI variables needed). Artifacts: verdict.json, dotenv VERDICT=...
 canary:
   stage: deploy
   image: docker:27
@@ -39,3 +40,17 @@ canary:
       - tests/e2e/.out/seed.log
     reports:
       dotenv: verdict.env
+
+# Forced bad release: same pipeline, the canary carries injected faults. Manual everywhere, so a
+# ROLLBACK lands in the pipeline history on demand (H4).
+canary:bad-release:
+  extends: canary
+  variables:
+    CANARY_FORCE_BAD: '1'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
