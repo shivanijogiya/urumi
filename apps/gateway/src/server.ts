@@ -145,7 +145,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   const allowedHosts = deps.upstreamAllowedHosts ?? [];
   const lookup = deps.lookup ? { lookup: deps.lookup } : {};
-  const client = new UpstreamClient({ encKey: deps.encKey, allowedHosts, ...lookup });
+  const client = new UpstreamClient({
+    encKey: deps.encKey,
+    allowedHosts,
+    ...lookup,
+    log: app.log,
+  });
   const registry = new ToolRegistry({
     pool: deps.pool,
     client,

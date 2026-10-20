@@ -1,6 +1,8 @@
 // Talks to one upstream MCP server with the official SDK Client over Streamable HTTP. Every
-// operation opens a fresh connection (upstreams are stateless), runs under one deadline that covers
-// the SSRF re-check, DNS, connect, initialize and the request itself, and closes the connection.
+// operation opens a fresh connection, runs under one deadline that covers the SSRF re-check, DNS,
+// connect, initialize and the request itself, and closes the connection. A stateful upstream
+// (server-everything, GitLab) hands out an Mcp-Session-Id on initialize: it is ended with DELETE
+// before closing, so sessions do not pile up on the upstream at one per health check.
 // The credential is decrypted here, just before use, and sent only as a request header.
 //
 // Failures become UpstreamError with a fixed, short `detail` (no URL, address, credential or raw
@@ -32,6 +34,8 @@ import { pinnedFetch } from './pinned-fetch.js';
 const CLIENT_INFO = { name: 'urumi-gateway', version: '0.1.0' };
 /** tools/list pages followed per listing; a misbehaving upstream cannot keep us paging forever. */
 const MAX_LIST_PAGES = 10;
+/** Bound on the best-effort session DELETE after each operation. */
+export const TERMINATE_TIMEOUT_MS = 1000;
 
 /** What the client needs from an upstream row. */
 export type UpstreamTarget = Pick<
@@ -69,6 +73,8 @@ export interface UpstreamClientOptions {
   allowedHosts: readonly string[];
   /** DNS resolver for the SSRF guard; the system resolver if unset. */
   lookup?: LookupFn;
+  /** Debug log for swallowed cleanup failures (session DELETE). */
+  log?: { debug(obj: object, msg: string): void };
 }
 
 type Phase = 'setup' | 'connect' | 'request';
@@ -141,10 +147,13 @@ export class UpstreamClient {
     const controller = new AbortController();
     let phase: Phase = 'setup';
     let client: Client | undefined;
+    let transport: StreamableHTTPClientTransport | undefined;
     let timer: NodeJS.Timeout | undefined;
+    let expired = false;
 
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        expired = true;
         controller.abort();
         reject(new UpstreamError('timeout', 'Timed out'));
       }, timeoutMs);
@@ -159,7 +168,7 @@ export class UpstreamClient {
         timeoutMs: Math.min(DNS_TIMEOUT_MS, timeoutMs),
       });
       if (controller.signal.aborted) throw new UpstreamError('timeout', 'Timed out');
-      const transport = new StreamableHTTPClientTransport(safe.url, {
+      transport = new StreamableHTTPClientTransport(safe.url, {
         requestInit: { headers },
         fetch: pinnedFetch(safe.addresses),
       });
@@ -183,7 +192,37 @@ export class UpstreamClient {
     } finally {
       clearTimeout(timer);
       controller.abort();
-      await client?.close().catch(() => undefined);
+      const released = this.release(client, transport);
+      // Past the deadline the caller is not kept waiting for cleanup; it still runs, bounded.
+      if (!expired) await released;
     }
+  }
+
+  /** Best-effort session DELETE (bounded, failures debug-logged), then close. Never rejects. */
+  private async release(
+    client: Client | undefined,
+    transport: StreamableHTTPClientTransport | undefined,
+  ): Promise<void> {
+    if (transport?.sessionId) {
+      let timer: NodeJS.Timeout | undefined;
+      const bound = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new UpstreamError('timeout', 'Timed out')),
+          TERMINATE_TIMEOUT_MS,
+        );
+      });
+      try {
+        await Promise.race([transport.terminateSession(), bound]);
+      } catch (err) {
+        this.opts.log?.debug(
+          { reason: classify(err, 'request').detail },
+          'upstream session termination failed',
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // Aborts anything still in flight, including a DELETE that outlived its bound.
+    await client?.close().catch(() => undefined);
   }
 }

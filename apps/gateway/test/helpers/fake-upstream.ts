@@ -1,8 +1,15 @@
 // Real MCP servers for the aggregation tests: the SDK McpServer on Streamable HTTP (stateless,
 // JSON responses) over node:http on an ephemeral 127.0.0.1 port. Variants are options: delays in
-// tools/list or in a tool, a required bearer, custom tool lists, failing calls. `stop()` +
-// `start()` on the same port simulates a dead upstream coming back.
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+// tools/list or in a tool, a required bearer, custom tool lists, failing calls, stateful sessions.
+// `stop()` + `start()` on the same port simulates a dead upstream coming back.
+import { randomUUID } from 'node:crypto';
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -29,6 +36,13 @@ export interface FakeUpstreamOptions {
   resultPadding?: number;
   /** Tool calls fail: 'throw' answers with a JSON-RPC error, 'isError' with an isError result. */
   callFails?: 'throw' | 'isError';
+  /**
+   * Stateful, like server-everything or GitLab: initialize opens a session (Mcp-Session-Id) that
+   * lives until the client sends DELETE. `liveSessions()` counts the open ones.
+   */
+  stateful?: boolean;
+  /** With `stateful`: DELETE requests are never answered. */
+  deleteHangs?: boolean;
 }
 
 export interface FakeUpstream {
@@ -39,6 +53,10 @@ export interface FakeUpstream {
   requests: { method: string; headers: IncomingHttpHeaders }[];
   /** Tool calls received: name and arguments. */
   calls: { name: string; args: unknown }[];
+  /** Sessions opened and not yet terminated (always 0 unless `stateful`). */
+  liveSessions(): number;
+  /** Responses whose connection closed before the whole body was sent (the client hung up). */
+  unfinishedResponses: number;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -90,18 +108,55 @@ export async function startFakeUpstream(
 ): Promise<FakeUpstream> {
   const requests: FakeUpstream['requests'] = [];
   const calls: FakeUpstream['calls'] = [];
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
   let server: Server | null = null;
+
+  // One server + transport per session, kept until DELETE (the SDK's stateful example).
+  const handleStateful = (req: IncomingMessage, res: ServerResponse) => {
+    const fail = () => res.headersSent || res.writeHead(500).end();
+    const sid = req.headers['mcp-session-id'];
+    const existing = typeof sid === 'string' ? sessions.get(sid) : undefined;
+    if (req.method === 'DELETE' && opts.deleteHangs) return;
+    if (existing) {
+      existing.handleRequest(req, res).catch(fail);
+      return;
+    }
+    if (sid) {
+      res.writeHead(404, { 'content-type': 'text/plain' }).end('unknown session');
+      return;
+    }
+    const mcp = mcpServer(opts, calls);
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (id) => void sessions.set(id, transport),
+      onsessionclosed: (id) => void sessions.delete(id),
+    });
+    mcp
+      .connect(transport)
+      .then(() => transport.handleRequest(req, res))
+      .catch(fail);
+  };
 
   const fake: FakeUpstream = {
     port,
     url: '',
     requests,
     calls,
+    liveSessions: () => sessions.size,
+    unfinishedResponses: 0,
     async start() {
       const s = createServer((req, res) => {
         requests.push({ method: req.method ?? '', headers: req.headers });
+        res.on('close', () => {
+          if (!res.writableFinished) fake.unfinishedResponses++;
+        });
         if (opts.requireBearer && req.headers.authorization !== `Bearer ${opts.requireBearer}`) {
           res.writeHead(401, { 'content-type': 'text/plain' }).end('unauthorized');
+          return;
+        }
+        if (opts.stateful) {
+          handleStateful(req, res);
           return;
         }
         // Stateless: a fresh server + transport per request, as the SDK examples do.
