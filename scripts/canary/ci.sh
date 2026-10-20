@@ -8,9 +8,14 @@
 #   5. deploys this commit as the canary (scripts/canary/run.sh deploy); CANARY_FORCE_BAD=1 injects
 #      FAULT_INJECT_ERROR_RATE=$CANARY_BAD_ERROR_RATE (default 0.5) into the canary only
 #   6. scripts/canary/verdict.py decides; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> run.sh rollback
-#   7. writes verdict.json and verdict.env (VERDICT=..., CANARY_ACTION=...) in the repo root
-# Exit 0 when the decision was applied (PROMOTE promoted, ROLLBACK rolled back). Non-zero on HOLD
-# (no decision possible), on any setup failure, or when CANARY_FORCE_BAD=1 was not rolled back.
+#   7. writes verdict.json (verdict.py's report + decision, timeline, CI links) and verdict.env
+#      (VERDICT=..., DECISION=..., CANARY_ACTION=...) in the repo root, and prints the report as one
+#      `CANARY_VERDICT_JSON: {...}` log line for the incident flow (.gitlab/flows/incident.yaml)
+# Exit 0 only when the release was accepted (PROMOTE promoted). Exit 1 on ROLLBACK ("RELEASE
+# REJECTED: canary rolled back", so the pipeline fails and the incident flow's Pipeline Failed
+# trigger fires), on HOLD (no decision possible), on any setup failure, and when CANARY_FORCE_BAD=1
+# was not rolled back. A forced bad release therefore always fails the job: read DECISION / the
+# log to tell a drill that worked (ROLLBACK) from one that did not.
 #
 # Env:
 #   CANARY_FORCE_BAD        1 = forced bad release
@@ -29,6 +34,7 @@ CHART="$ROOT/charts/platform"
 VERDICT_JSON="$ROOT/verdict.json"
 VERDICT_ENV="$ROOT/verdict.env"
 KEY_FILE="$ROOT/tests/e2e/.out/userb2.key"
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 for c in docker k3d kubectl helm node jq curl python3 openssl git; do need "$c" "Install $c"; done
 
@@ -79,31 +85,51 @@ if [ "$CANARY_FORCE_BAD" = 1 ]; then
   fault=(--error-rate "$CANARY_BAD_ERROR_RATE")
 fi
 IMAGE_MODE=import "$ROOT/scripts/canary/run.sh" deploy "$CANARY_TAG" ${fault[@]+"${fault[@]}"}
+canary_live_at=$(now)
 
 say "6/7 verdict"
 set +e
 python3 "$ROOT/scripts/canary/verdict.py" --key-file "$KEY_FILE" --out "$VERDICT_JSON"
 code=$?
 set -e
+verdict_at=$(now)
 case "$code" in
   0) verdict=PROMOTE action=promoted ;;
   1) verdict=ROLLBACK action=rolled-back ;;
   2) verdict=HOLD action=rolled-back ;;
   *) die "verdict.py failed (exit $code)" ;;
 esac
-if [ "$verdict" = PROMOTE ]; then
+decision=$verdict
+if [ "$decision" = PROMOTE ]; then
   IMAGE_MODE=none "$ROOT/scripts/canary/run.sh" promote "$CANARY_TAG"
 else
   IMAGE_MODE=none "$ROOT/scripts/canary/run.sh" rollback "$CANARY_TAG"
 fi
-printf 'VERDICT=%s\nCANARY_ACTION=%s\nCANARY_TAG=%s\n' "$verdict" "$action" "$CANARY_TAG" >"$VERDICT_ENV"
+applied_at=$(now)
+printf 'VERDICT=%s\nDECISION=%s\nCANARY_ACTION=%s\nCANARY_TAG=%s\n' \
+  "$verdict" "$decision" "$action" "$CANARY_TAG" >"$VERDICT_ENV"
+# Record the decision next to the measurements (record.jq).
+jq -f "$ROOT/scripts/canary/record.jq" --arg decision "$decision" --arg action "$action" \
+  --arg tag "$CANARY_TAG" --arg force_bad "$CANARY_FORCE_BAD" --arg risk "${RISK:-}" \
+  --arg weight "${CANARY_WEIGHT:-20}" --arg live "$canary_live_at" --arg verdict_at "$verdict_at" \
+  --arg applied "$applied_at" --arg pipeline_id "${CI_PIPELINE_ID:-}" \
+  --arg pipeline_url "${CI_PIPELINE_URL:-}" --arg job_name "${CI_JOB_NAME:-}" \
+  --arg job_url "${CI_JOB_URL:-}" --arg sha "$(git -C "$ROOT" rev-parse HEAD)" \
+  --arg ref "${CI_COMMIT_REF_NAME:-}" "$VERDICT_JSON" >"$VERDICT_JSON.tmp"
+mv "$VERDICT_JSON.tmp" "$VERDICT_JSON"
 
 say "7/7 result"
 echo "================================================================"
-echo " CANARY VERDICT: $verdict -> $action ($CANARY_TAG, force_bad=$CANARY_FORCE_BAD)"
+echo " CANARY VERDICT: $verdict -> $decision, $action ($CANARY_TAG, force_bad=$CANARY_FORCE_BAD)"
 jq -r '.reasons[] | "   - " + .' "$VERDICT_JSON"
 echo "================================================================"
+# One machine-readable line for the incident flow, which reads this job's log.
+echo "CANARY_VERDICT_JSON: $(jq -c . "$VERDICT_JSON")"
 [ "$verdict" != HOLD ] || die "HOLD: not enough evidence to decide; canary rolled back"
 if [ "$CANARY_FORCE_BAD" = 1 ] && [ "$verdict" != ROLLBACK ]; then
   die "forced bad release was not rolled back (verdict $verdict)"
+fi
+if [ "$verdict" = ROLLBACK ]; then
+  [ "$CANARY_FORCE_BAD" != 1 ] || warn "forced bad release drill: ROLLBACK is the expected outcome"
+  die "RELEASE REJECTED: canary rolled back"
 fi

@@ -3,10 +3,15 @@
 # seed, deploy this commit as a 20 % canary, let scripts/canary/verdict.py decide, then promote or
 # roll back. All logic lives in scripts/canary/ci.sh. No external secrets: .env.local is generated.
 #
-# The job succeeds when the decision was applied (PROMOTE -> promoted, ROLLBACK -> rolled back) and
-# fails on HOLD. `canary:bad-release` is the same job with CANARY_FORCE_BAD=1: a 50 % tools/call error
-# rate is injected into the canary and the job must end in ROLLBACK (a one-click drill that leaves a
-# ROLLBACK in the pipeline history; no CI variables needed). Artifacts: verdict.json, dotenv VERDICT=...
+# The job succeeds only when the release is accepted (PROMOTE). ROLLBACK fails it ("RELEASE REJECTED:
+# canary rolled back") and so does HOLD. On the default branch the job is not allow_failure, so a
+# rejected release fails main's pipeline, which is what fires the incident flow (#24,
+# .gitlab/flows/incident.yaml, trigger: Pipeline events -> Failed). On MRs it stays manual and
+# allow_failure, so a rejected canary never blocks review. `canary:bad-release` is the same job with
+# CANARY_FORCE_BAD=1: a 50 % tools/call error rate is injected into the canary, the verdict must be
+# ROLLBACK and the job then fails on purpose (a one-click, human-initiated drill; no CI variables
+# needed). The log carries one `CANARY_VERDICT_JSON: {...}` line. Artifacts: verdict.json, dotenv
+# VERDICT=... DECISION=...
 canary:
   stage: deploy
   image: docker:27
@@ -25,6 +30,7 @@ canary:
       when: manual
       allow_failure: true
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      allow_failure: false
   before_script:
     - apk add --no-cache bash curl jq nodejs python3 openssl git kubectl helm
     - curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=$K3D_VERSION bash
@@ -42,7 +48,10 @@ canary:
       dotenv: verdict.env
 
 # Forced bad release: same pipeline, the canary carries injected faults. Manual everywhere, so a
-# ROLLBACK lands in the pipeline history on demand (H4).
+# ROLLBACK lands in the pipeline history on demand (H4). On the default branch it is not
+# allow_failure: clicking it fails main's pipeline, a human-initiated failure, so the incident flow
+# fires (flow triggers ignore pipelines nobody started). Side effect: until someone clicks it, a main
+# pipeline shows "blocked" (a manual job with allow_failure: false); see docs/adr/004-duo-flows.md.
 canary:bad-release:
   extends: canary
   variables:
@@ -53,4 +62,4 @@ canary:bad-release:
       allow_failure: true
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
-      allow_failure: true
+      allow_failure: false
