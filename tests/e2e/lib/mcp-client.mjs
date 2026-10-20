@@ -1,4 +1,4 @@
-/* global process, URL, console */
+/* global process, URL */
 // Minimal MCP client for the e2e steps: what an external team member's client does, given only the
 // gateway URL and an API key. Uses the official SDK Client + StreamableHTTPClientTransport.
 //   MCP_KEY_FILE=<file holding the key> node mcp-client.mjs <url> list
@@ -20,7 +20,10 @@ function out(value, code = 0) {
 }
 
 if (!url || !['list', 'call'].includes(command) || (command === 'call' && !name)) {
-  out({ error: { status: null, message: 'usage: mcp-client.mjs <url> list|call <tool> [json]' } }, 2);
+  out(
+    { error: { status: null, message: 'usage: mcp-client.mjs <url> list|call <tool> [json]' } },
+    2,
+  );
 }
 const keyFile = process.env.MCP_KEY_FILE;
 if (!keyFile) out({ error: { status: null, message: 'MCP_KEY_FILE is not set' } }, 2);
