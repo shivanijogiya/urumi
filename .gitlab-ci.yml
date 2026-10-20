@@ -13,6 +13,8 @@ k3d-dind:
     - k3d cluster create spike --wait --timeout 180s --api-port 0.0.0.0:6550 -p "8081:80@loadbalancer"
     - sed -i 's/0.0.0.0/docker/' ~/.kube/config
     - kubectl get nodes -o wide
+    - for i in $(seq 1 60); do kubectl -n kube-system get deploy traefik >/dev/null 2>&1 && break; sleep 3; done
     - kubectl -n kube-system rollout status deploy/traefik --timeout=180s
+    - kubectl create ns np && kubectl -n np run srv --image=nginx:alpine --port=80 --expose && kubectl -n np wait pod/srv --for=condition=Ready --timeout=120s
     - kubectl create deploy web --image=nginx:alpine && kubectl rollout status deploy/web --timeout=120s
     - echo "PASS k3d-in-dind"
