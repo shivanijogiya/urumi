@@ -10,7 +10,7 @@ import {
   type ErrorCode,
   type Tool,
 } from '@urumi/contracts';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CALL_TIMEOUT_MS, GatewayError, type CallRecord } from '../src/core/call-tool.js';
 import {
   MAX_INPUT_SCHEMA_BYTES,
@@ -442,6 +442,19 @@ describe('untrusted payload sizes', () => {
       outcome: 'error',
       errorCode: 'UPSTREAM_ERROR',
     });
+  });
+
+  it('cuts a 5 MB result off while it streams: too-large error, upstream response aborted', async () => {
+    const huge = await fake({ identity: 'huge', resultPadding: 5 * 1024 * 1024 });
+    await addUpstream('huge', huge.url);
+
+    const err = await expectCallError(call('huge__search'), 'UPSTREAM_ERROR');
+    expect(err.message).toBe('Tool result too large');
+    expect(records.at(-1)).toMatchObject({ outcome: 'error', errorCode: 'UPSTREAM_ERROR' });
+    expect(logs).toMatch(/tool result too large/);
+    // The gateway hung up mid-body (it destroys the socket; a fully read response would leave a
+    // keep-alive connection open for seconds). The bytes-read bound is in body-limit.test.ts.
+    await vi.waitFor(() => expect(huge.openConnections).toBe(0), { timeout: 1000 });
   });
 
   it('passes a result just under 256 KB', async () => {

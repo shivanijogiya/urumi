@@ -8,6 +8,12 @@ export const MAX_TOOLS_PER_UPSTREAM = 200;
 export const MAX_INPUT_SCHEMA_BYTES = 16 * 1024;
 /** tools/call: a JSON-serialised result over this (UTF-8 bytes) fails with UPSTREAM_ERROR. */
 export const MAX_RESULT_BYTES = 256 * 1024;
+/**
+ * tools/call: raw HTTP response body bytes read before the upstream is cut off (same error). The
+ * body wraps the result in a JSON-RPC envelope (and SSE framing), hence the slack; the check on
+ * the parsed result above stays the exact one.
+ */
+export const MAX_RESULT_RESPONSE_BYTES = MAX_RESULT_BYTES + 16 * 1024;
 
 /** UTF-8 byte length of JSON.stringify(value); Infinity if it cannot be serialised. */
 export function jsonBytes(value: unknown): number {

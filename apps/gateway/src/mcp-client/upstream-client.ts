@@ -29,6 +29,8 @@ import {
   SsrfBlockedError,
   type LookupFn,
 } from '../upstreams/ssrf.js';
+import { MAX_RESULT_RESPONSE_BYTES } from '../core/limits.js';
+import { withBodyLimit } from './body-limit.js';
 import { pinnedFetch } from './pinned-fetch.js';
 
 const CLIENT_INFO = { name: 'urumi-gateway', version: '0.1.0' };
@@ -63,6 +65,14 @@ export class UpstreamError extends Error {
     readonly detail: string,
   ) {
     super(detail);
+  }
+}
+
+/** A tools/call response body passed MAX_RESULT_RESPONSE_BYTES; the upstream was cut off. */
+export class ResultTooLargeError extends UpstreamError {
+  override name = 'ResultTooLargeError';
+  constructor() {
+    super('error', 'Result too large');
   }
 }
 
@@ -120,29 +130,39 @@ export class UpstreamClient {
     });
   }
 
-  /** One tools/call, within `timeoutMs` in total. A tool-level failure (`isError`) is a result. */
+  /**
+   * One tools/call, within `timeoutMs` in total. A tool-level failure (`isError`) is a result. A
+   * response body over MAX_RESULT_RESPONSE_BYTES is cut off as it streams: ResultTooLargeError.
+   */
   callTool(
     target: UpstreamTarget,
     name: string,
     args: Record<string, unknown>,
     timeoutMs: number,
   ): Promise<CallToolResult> {
-    return this.withConnection(target, timeoutMs, async (client, options) => {
-      const result = await client.callTool(
-        { name, arguments: args },
-        CallToolResultSchema,
-        options,
-      );
-      const parsed = CallToolResultSchema.safeParse(result);
-      if (!parsed.success) throw new UpstreamError('error', 'Unexpected response');
-      return parsed.data;
-    });
+    return this.withConnection(
+      target,
+      timeoutMs,
+      async (client, options) => {
+        const result = await client.callTool(
+          { name, arguments: args },
+          CallToolResultSchema,
+          options,
+        );
+        const parsed = CallToolResultSchema.safeParse(result);
+        if (!parsed.success) throw new UpstreamError('error', 'Unexpected response');
+        return parsed.data;
+      },
+      MAX_RESULT_RESPONSE_BYTES,
+    );
   }
 
   private async withConnection<T>(
     target: UpstreamTarget,
     timeoutMs: number,
     op: (client: Client, options: RequestOptions) => Promise<T>,
+    /** Per HTTP response body; unlimited if unset. */
+    maxResponseBytes?: number,
   ): Promise<T> {
     const controller = new AbortController();
     let phase: Phase = 'setup';
@@ -150,6 +170,7 @@ export class UpstreamClient {
     let transport: StreamableHTTPClientTransport | undefined;
     let timer: NodeJS.Timeout | undefined;
     let expired = false;
+    let tooLarge = false;
 
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -158,6 +179,17 @@ export class UpstreamClient {
         reject(new UpstreamError('timeout', 'Timed out'));
       }, timeoutMs);
     });
+    // An SSE response's body errors outside the request promise (the SDK only reports it to
+    // onerror), so the cut-off also settles the race directly.
+    let overflow: (err: ResultTooLargeError) => void = () => undefined;
+    const overflowed = new Promise<never>((_, reject) => (overflow = reject));
+    overflowed.catch(() => undefined);
+    const onExceeded = () => {
+      const err = new ResultTooLargeError();
+      tooLarge = true;
+      overflow(err);
+      return err;
+    };
 
     const run = async (): Promise<T> => {
       const headers = credentialHeaders(target, this.opts.encKey);
@@ -168,9 +200,10 @@ export class UpstreamClient {
         timeoutMs: Math.min(DNS_TIMEOUT_MS, timeoutMs),
       });
       if (controller.signal.aborted) throw new UpstreamError('timeout', 'Timed out');
+      const fetch = pinnedFetch(safe.addresses);
       transport = new StreamableHTTPClientTransport(safe.url, {
         requestInit: { headers },
-        fetch: pinnedFetch(safe.addresses),
+        fetch: maxResponseBytes ? withBodyLimit(fetch, maxResponseBytes, onExceeded) : fetch,
       });
       client = new Client(CLIENT_INFO);
       // The SDK's own per-request timeout is a backstop; the deadline above is authoritative.
@@ -184,8 +217,9 @@ export class UpstreamClient {
     const work = run();
     work.catch(() => undefined); // settled after a timeout; the race already reported it
     try {
-      return await Promise.race([work, deadline]);
+      return await Promise.race([work, deadline, overflowed]);
     } catch (err) {
+      if (tooLarge) throw new ResultTooLargeError();
       throw controller.signal.aborted
         ? new UpstreamError('timeout', 'Timed out')
         : classify(err, phase);

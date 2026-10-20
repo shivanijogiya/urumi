@@ -55,8 +55,8 @@ export interface FakeUpstream {
   calls: { name: string; args: unknown }[];
   /** Sessions opened and not yet terminated (always 0 unless `stateful`). */
   liveSessions(): number;
-  /** Responses whose connection closed before the whole body was sent (the client hung up). */
-  unfinishedResponses: number;
+  /** TCP connections currently open. */
+  openConnections: number;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -144,13 +144,10 @@ export async function startFakeUpstream(
     requests,
     calls,
     liveSessions: () => sessions.size,
-    unfinishedResponses: 0,
+    openConnections: 0,
     async start() {
       const s = createServer((req, res) => {
         requests.push({ method: req.method ?? '', headers: req.headers });
-        res.on('close', () => {
-          if (!res.writableFinished) fake.unfinishedResponses++;
-        });
         if (opts.requireBearer && req.headers.authorization !== `Bearer ${opts.requireBearer}`) {
           res.writeHead(401, { 'content-type': 'text/plain' }).end('unauthorized');
           return;
@@ -170,6 +167,10 @@ export async function startFakeUpstream(
           .connect(transport)
           .then(() => transport.handleRequest(req, res))
           .catch(() => res.headersSent || res.writeHead(500).end());
+      });
+      s.on('connection', (socket) => {
+        fake.openConnections++;
+        socket.on('close', () => void fake.openConnections--);
       });
       await new Promise<void>((resolve, reject) => {
         s.once('error', reject);
