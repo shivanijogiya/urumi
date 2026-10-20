@@ -1,3 +1,18 @@
-hello:
+# Throwaway spike (risk #2): can k3d run inside a GitLab shared-runner job via DinD?
+k3d-dind:
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ''
   script:
-    - echo ok
+    - apk add --no-cache curl bash kubectl
+    - curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.9.0 bash
+    - k3d cluster create spike --wait --timeout 180s --api-port 0.0.0.0:6550 -p "8081:80@loadbalancer"
+    - sed -i 's/0.0.0.0/docker/' ~/.kube/config
+    - kubectl get nodes -o wide
+    - kubectl -n kube-system rollout status deploy/traefik --timeout=180s
+    - kubectl create deploy web --image=nginx:alpine && kubectl rollout status deploy/web --timeout=120s
+    - echo "PASS k3d-in-dind"
