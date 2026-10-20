@@ -45,6 +45,17 @@ describe('loadConfig', () => {
     expect(c.sessionSecret).toBe(SESSION_SECRET);
     expect(c.publicOrigin).toBe('http://app.localtest.me');
     expect(c.cookieSecure).toBe(false);
+    // In-cluster the gateway sits behind Traefik, which sets X-Forwarded-For.
+    expect(c.trustProxy).toBe(true);
+  });
+
+  it('parses TRUST_PROXY as true, false, or a hop count', () => {
+    expect(loadConfig({ ...valid, TRUST_PROXY: 'false' }).trustProxy).toBe(false);
+    expect(loadConfig({ ...valid, TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(loadConfig({ ...valid, TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    for (const bad of ['yes', '-1', '1.5']) {
+      expect(errorFor({ ...valid, TRUST_PROXY: bad }).message).toContain('TRUST_PROXY');
+    }
   });
 
   it('honours PUBLIC_ORIGIN and COOKIE_SECURE', () => {

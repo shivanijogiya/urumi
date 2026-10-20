@@ -144,6 +144,26 @@ describe('sessions', () => {
     }
   });
 
+  it('rejects a request carrying more than one session cookie', async () => {
+    const cookie = await t.login(ADMIN.email, ADMIN.password);
+    const other = await t.login(ADMIN.email, ADMIN.password);
+    for (const header of [
+      `${cookie}; ${cookie}`,
+      `${cookie}; ${other}`,
+      `${cookie}; urumi_session=${'A'.repeat(43)}`,
+      `urumi_session=junk; ${cookie}`,
+    ]) {
+      expectError(
+        await t.request('GET', '/api/auth/me', { cookie: header }),
+        401,
+        'UNAUTHENTICATED',
+      );
+    }
+    // Other cookies alongside one session cookie are fine.
+    const res = await t.request('GET', '/api/auth/me', { cookie: `theme=dark; ${cookie}; x=1` });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('logout deletes the session row and clears the cookie', async () => {
     const cookie = await t.login(ADMIN.email, ADMIN.password);
     const res = await t.request('POST', '/api/auth/logout', { cookie });
@@ -311,5 +331,33 @@ describe('CSRF', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(sessionCookie(res)).toBeUndefined();
+  });
+
+  it('cannot be bypassed with a percent-encoded path', async () => {
+    const cookie = await t.login(ADMIN.email, ADMIN.password);
+    const evil = await t.request('POST', '/%61pi/auth/logout', {
+      cookie,
+      headers: { origin: 'http://evil.example' },
+    });
+    expectError(evil, 403, 'FORBIDDEN');
+    expect((await t.request('GET', '/api/auth/me', { cookie })).statusCode).toBe(200);
+
+    // The same encoded path is the real route: with the right Origin it logs out.
+    const ok = await t.request('POST', '/%61pi/auth/logout', {
+      cookie,
+      headers: { origin: PUBLIC_ORIGIN },
+    });
+    expect(ok.statusCode).toBe(204);
+    expectError(await t.request('GET', '/api/auth/me', { cookie }), 401, 'UNAUTHENTICATED');
+  });
+
+  it('applies to unsafe methods on every path, matched or not', async () => {
+    const headers = { origin: 'http://evil.example' };
+    expectError(
+      await t.request('POST', '/API/auth/login', { body: ADMIN, headers }),
+      403,
+      'FORBIDDEN',
+    );
+    expectError(await t.request('DELETE', '/nope', { headers }), 403, 'FORBIDDEN');
   });
 });

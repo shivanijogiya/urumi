@@ -47,6 +47,16 @@ const EnvSchema = z.object({
       .default('false')
       .transform((v) => v === 'true'),
   ),
+  // Client IP from X-Forwarded-For (per-IP login throttle). In-cluster the gateway sits behind
+  // Traefik, which replaces any client-sent X-Forwarded-For. `true`, `false`, or a hop count.
+  TRUST_PROXY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .default('true')
+      .refine((v) => /^(true|false|[0-9]{1,2})$/.test(v), 'must be true, false, or a hop count')
+      .transform((v) => (v === 'true' ? true : v === 'false' ? false : Number(v))),
+  ),
 });
 
 /** Needed unless DATABASE_URL is set. Checked outside zod so they are reported with other errors. */
@@ -67,6 +77,8 @@ export interface Config {
   /** e.g. `http://app.localtest.me` (no trailing slash). */
   publicOrigin: string;
   cookieSecure: boolean;
+  /** Fastify trustProxy. */
+  trustProxy: boolean | number;
 }
 
 export class ConfigError extends Error {
@@ -108,6 +120,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionSecret: e.GATEWAY_SESSION_SECRET,
     publicOrigin: e.PUBLIC_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,
+    trustProxy: e.TRUST_PROXY,
   };
 }
 

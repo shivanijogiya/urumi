@@ -58,16 +58,21 @@ export function clearSessionCookie(reply: FastifyReply): void {
   );
 }
 
-/** The session token from the Cookie header, if it is well-formed. */
+/**
+ * The session token from the Cookie header, if there is exactly one well-formed session cookie.
+ * More than one is refused rather than picking one: a sibling subdomain can plant a second
+ * `urumi_session` (cookie tossing), and which one the browser sends first is not ours to choose.
+ */
 export function readSessionToken(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;
+  const values: string[] = [];
   for (const part of cookieHeader.split(';')) {
     const eq = part.indexOf('=');
-    if (eq === -1 || part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
-    const value = part.slice(eq + 1).trim();
-    return TOKEN_RE.test(value) ? value : null;
+    if (eq !== -1 && part.slice(0, eq).trim() === SESSION_COOKIE) {
+      values.push(part.slice(eq + 1).trim());
+    }
   }
-  return null;
+  return values.length === 1 && TOKEN_RE.test(values[0]!) ? values[0]! : null;
 }
 
 /**

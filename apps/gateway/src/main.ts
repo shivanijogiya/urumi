@@ -27,6 +27,7 @@ async function main(): Promise<void> {
     logger: LOGGER_OPTIONS,
     publicOrigin: config.publicOrigin,
     cookieSecure: config.cookieSecure,
+    trustProxy: config.trustProxy,
   });
 
   const shutdown = async (signal: string) => {

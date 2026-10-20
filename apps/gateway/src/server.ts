@@ -1,7 +1,7 @@
 import { httpStatusFor, makeError } from '@urumi/contracts';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type pg from 'pg';
-import { LoginLimiter } from './auth/login-limiter.js';
+import { IP_MAX_FAILURES, LoginLimiter } from './auth/login-limiter.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
@@ -18,6 +18,11 @@ export interface AppDeps {
   publicOrigin?: string;
   /** Adds `Secure` to the session cookie. Default false (plain HTTP locally). */
   cookieSecure?: boolean;
+  /**
+   * Fastify trustProxy: take the client IP (per-IP login throttle) from X-Forwarded-For. Default
+   * false (direct connections, tests); main.ts passes TRUST_PROXY.
+   */
+  trustProxy?: boolean | number;
 }
 
 /** JSON logs; credentials in headers are never written. */
@@ -44,7 +49,11 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: deps.logger ?? false });
+  const options: FastifyServerOptions = {
+    logger: deps.logger ?? false,
+    trustProxy: deps.trustProxy ?? false,
+  };
+  const app = Fastify(options);
   app.decorate('pool', deps.pool);
   app.decorate('cookieSecure', deps.cookieSecure ?? false);
   app.decorateRequest('user', null);
@@ -84,7 +93,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   registerCsrfGuard(app, deps.publicOrigin ?? 'http://app.localtest.me');
-  registerAuthRoutes(app, new LoginLimiter());
+  registerAuthRoutes(app, {
+    email: new LoginLimiter(),
+    ip: new LoginLimiter({ maxFailures: IP_MAX_FAILURES }),
+  });
   registerUserRoutes(app);
   registerKeyRoutes(app);
 
