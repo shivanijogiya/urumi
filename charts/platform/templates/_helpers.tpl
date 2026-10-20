@@ -84,6 +84,11 @@ same site. Usage: include "platform.wordpressEnv" . | nindent 12
 {{- default (include "platform.componentName" (dict "ctx" . "component" "postgres")) .Values.gateway.database.host }}
 {{- end }}
 
+{{/* MCP endpoint of the in-cluster woo-mcp Service, as the gateway calls it. */}}
+{{- define "platform.wooMcpUrl" -}}
+{{- printf "http://%s.%s.svc.cluster.local/mcp" (include "platform.componentName" (dict "ctx" . "component" "woo-mcp")) .Release.Namespace }}
+{{- end }}
+
 {{/* Base URL the gateway side uses for the WooCommerce REST API: bootstrap.wooUrl, else the in-cluster WordPress Service. */}}
 {{- define "platform.wooUrl" -}}
 {{- if .Values.bootstrap.wooUrl }}

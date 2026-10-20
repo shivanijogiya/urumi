@@ -8,7 +8,8 @@
 #                           the store, create the API user and (only if needed) a new
 #                           Application Password, written to an in-memory file.
 #   container `publish`     kubectl: applies the Secret `apiSecretName` from that file and checks
-#                           that the password authenticates against /wp-json/wc/v3/orders.
+#                           that the password authenticates against /wp-json/wc/v3/orders,
+#                           then starts (or restarts) woo-mcp, which reads that Secret.
 # Both scripts are idempotent and never print a secret.
 apiVersion: batch/v1
 kind: Job
@@ -135,6 +136,11 @@ spec:
               value: {{ $v.environmentType | quote }}
             - name: SECRET_LABELS
               value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=woo-api" (include "platform.name" .) .Release.Name | quote }}
+            {{- if .Values.wooMcp.enabled }}
+            # Scaled up / restarted once the Secret is published (see templates/woo-mcp).
+            - name: WOO_MCP_DEPLOYMENT
+              value: {{ include "platform.componentName" (dict "ctx" $ "component" "woo-mcp") | quote }}
+            {{- end }}
           resources:
             {{- toYaml $v.kubectl.resources | nindent 12 }}
           volumeMounts:

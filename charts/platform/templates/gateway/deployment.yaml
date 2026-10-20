@@ -62,6 +62,16 @@ spec:
                   name: {{ $.Values.secretName }}
                   key: {{ $key }}
             {{- end }}
+            {{- if .Values.wooMcp.enabled }}
+            # The internal woo-mcp upstream (W3) and the header secret it requires.
+            - name: WOO_MCP_URL
+              value: {{ include "platform.wooMcpUrl" . | quote }}
+            - name: WOO_MCP_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ .Values.wooMcp.secretKeys.sharedSecret }}
+            {{- end }}
           # Startup waits for Postgres (up to 2 min) and runs migrations before listening.
           startupProbe:
             httpGet:

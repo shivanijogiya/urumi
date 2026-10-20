@@ -153,6 +153,35 @@ postgres:
       cpu: 500m
       memory: 256Mi
 
+# WooCommerce MCP server (W3, K5). Internal only: ClusterIP Service, no Ingress, and a
+# NetworkPolicy that admits only this release's gateway pods. Its store credentials come from the
+# Secret the bootstrap Job writes (bootstrap.apiSecretName); until that Secret exists the
+# Deployment renders with 0 replicas and the bootstrap Job scales it up (see the template).
+wooMcp:
+  enabled: true
+  networkPolicy:
+    enabled: true
+  image:
+    repository: registry.gitlab.com/<group>/<project>/woo-mcp
+    # Empty = the chart's appVersion.
+    tag: ''
+    pullPolicy: IfNotPresent
+  # Key inside `secretName` for the header secret the gateway sends (x-woo-mcp-secret).
+  secretKeys:
+    sharedSecret: WOO_MCP_SHARED_SECRET
+  # WOO_FORWARDED_PROTO: sent as X-Forwarded-Proto on in-cluster calls to WordPress. Must be
+  # `https` when bootstrap.environmentType is not `local` (Application Passwords need HTTPS).
+  forwardedProto: https
+  # WOO_HOST_HEADER: Host header override for WordPress. Empty = not set.
+  hostHeader: ''
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
 # MCP gateway + admin API. Runs migrations and seeds the first admin on start.
 gateway:
   enabled: true
