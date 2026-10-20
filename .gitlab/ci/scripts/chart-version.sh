@@ -4,10 +4,11 @@
 #   Tag pipeline (CI_COMMIT_TAG=v1.2.3 or v1.2.3-rc.1)
 #       CHART_VERSION=1.2.3          CHART_APP_VERSION=1.2.3
 #   Any other pipeline
-#       CHART_VERSION=<X.Y.Z from Chart.yaml>-g<first 8 chars of CI_COMMIT_SHA>
-#       CHART_APP_VERSION=<CI_COMMIT_SHA>
+#       CHART_VERSION=<X.Y.Z from Chart.yaml>-g<short sha>
+#       CHART_APP_VERSION=<short sha>
+#   <short sha> is CI_COMMIT_SHORT_SHA (GitLab: first 8 chars of CI_COMMIT_SHA).
 #
-# CHART_APP_VERSION is always an image tag the release jobs push, so templates can
+# CHART_APP_VERSION is always an image tag the release jobs push, and the chart templates
 # default image.tag to .Chart.AppVersion. Prints dotenv lines on stdout; on any
 # ambiguity it exits non-zero with instructions instead of guessing.
 #
@@ -42,5 +43,12 @@ base="$(sed -n 's/^version:[[:space:]]*//p' "$chart_yaml" | head -n 1 \
 printf '%s' "$base" | grep -Eq "^${semver}\$" \
   || die "$chart_yaml has no plain X.Y.Z 'version:' (got '$base'). Set it to the next release base (e.g. version: 0.1.0) or push a v1.2.3 tag."
 
-short="$(printf '%s' "$sha" | cut -c1-8)"
-printf 'CHART_VERSION=%s-g%s\nCHART_APP_VERSION=%s\n' "$base" "$short" "$sha"
+# Same value the image jobs tag with ($CI_COMMIT_SHORT_SHA); derived when run outside GitLab.
+short="${CI_COMMIT_SHORT_SHA:-$(printf '%s' "$sha" | cut -c1-8)}"
+printf '%s' "$short" | grep -Eq '^[0-9a-f]{7,40}$' \
+  || die "CI_COMMIT_SHORT_SHA must be 7-40 hex characters (got '$short')."
+case "$sha" in
+  "$short"*) ;;
+  *) die "CI_COMMIT_SHORT_SHA '$short' is not a prefix of CI_COMMIT_SHA." ;;
+esac
+printf 'CHART_VERSION=%s-g%s\nCHART_APP_VERSION=%s\n' "$base" "$short" "$short"

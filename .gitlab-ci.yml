@@ -1,12 +1,18 @@
+# build: app images (MR: build only; protected main/tags: push) + chart package.
+# secure: Secret Detection, SAST, IaC, and Container Scanning of the pushed images.
+# release: Helm chart push, after the scans. Release jobs: .gitlab/ci/release.gitlab-ci.yml.
 stages:
   - lint
   - test
+  - build
   - secure
+  - release
 
 include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/SAST-IaC.gitlab-ci.yml
+  - local: .gitlab/ci/release.gitlab-ci.yml
 
 # Run on merge requests, the default branch, tags, and any branch push. A branch
 # push with an open MR is skipped so the MR pipeline is the only one.

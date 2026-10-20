@@ -18,19 +18,23 @@ bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '
 # chart <dir> <version-line>
 chart() { mkdir -p "$1"; printf 'apiVersion: v2\nname: platform\n%s\nappVersion: "0.0.0"\n' "$2" > "$1/Chart.yaml"; }
 
-# run <name> <chart_dir> <tag> <sha>  -> sets OUT, RC
+# run <name> <chart_dir> <tag> <sha> [short_sha]  -> sets OUT, RC
 run() {
-  OUT="$(env -i PATH="$PATH" CI_COMMIT_TAG="$3" CI_COMMIT_SHA="$4" sh "$SCRIPT" "$2" 2>&1)"
+  if [ -n "${5:-}" ]; then
+    OUT="$(env -i PATH="$PATH" CI_COMMIT_TAG="$3" CI_COMMIT_SHA="$4" CI_COMMIT_SHORT_SHA="$5" sh "$SCRIPT" "$2" 2>&1)"
+  else
+    OUT="$(env -i PATH="$PATH" CI_COMMIT_TAG="$3" CI_COMMIT_SHA="$4" sh "$SCRIPT" "$2" 2>&1)"
+  fi
   RC=$?
 }
 
-expect_ok() { # name chart tag sha expected_output
-  run "$1" "$2" "$3" "$4"
+expect_ok() { # name chart tag sha expected_output [short_sha]
+  run "$1" "$2" "$3" "$4" "${6:-}"
   if [ "$RC" -eq 0 ] && [ "$OUT" = "$5" ]; then ok "$1"; else bad "$1" "rc=$RC out=$(printf '%s' "$OUT" | tr '\n' '|')"; fi
 }
 
-expect_fail() { # name chart tag sha message_fragment
-  run "$1" "$2" "$3" "$4"
+expect_fail() { # name chart tag sha message_fragment [short_sha]
+  run "$1" "$2" "$3" "$4" "${6:-}"
   if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -qF -- "$5"; then ok "$1"; else bad "$1" "rc=$RC out=$(printf '%s' "$OUT" | tr '\n' '|')"; fi
 }
 
@@ -52,17 +56,21 @@ expect_ok "tag pipeline does not need Chart.yaml version" "$TMP/empty" "v0.9.1" 
 "CHART_VERSION=0.9.1
 CHART_APP_VERSION=0.9.1"
 
-expect_ok "branch pipeline -> Chart.yaml base + commit, appVersion = full sha" "$TMP/good" "" "$SHA" \
+expect_ok "branch pipeline -> Chart.yaml base + commit, appVersion = short sha (pushed image tag)" "$TMP/good" "" "$SHA" \
 "CHART_VERSION=0.4.0-g1a2b3c4d
-CHART_APP_VERSION=$SHA"
+CHART_APP_VERSION=1a2b3c4d"
+
+expect_ok "CI_COMMIT_SHORT_SHA is used when GitLab provides it" "$TMP/good" "" "$SHA" \
+"CHART_VERSION=0.4.0-g1a2b3c4d5e
+CHART_APP_VERSION=1a2b3c4d5e" "1a2b3c4d5e"
 
 expect_ok "quoted Chart.yaml version with comment" "$TMP/quoted" "" "$SHA" \
 "CHART_VERSION=1.2.0-g1a2b3c4d
-CHART_APP_VERSION=$SHA"
+CHART_APP_VERSION=1a2b3c4d"
 
 expect_ok "all-digit short sha still valid semver (g prefix)" "$TMP/good" "" "0123456789abcdef0123456789abcdef01234567" \
 "CHART_VERSION=0.4.0-g01234567
-CHART_APP_VERSION=0123456789abcdef0123456789abcdef01234567"
+CHART_APP_VERSION=01234567"
 
 expect_fail "tag without v prefix is rejected" "$TMP/good" "1.2.3" "$SHA" "v1.2.3"
 expect_fail "non-semver tag is rejected" "$TMP/good" "v1.2" "$SHA" "v1.2.3"
@@ -74,6 +82,8 @@ expect_fail "prerelease base version in Chart.yaml fails" "$TMP/pre" "" "$SHA" "
 expect_fail "missing CI_COMMIT_SHA fails" "$TMP/good" "" "" "CI_COMMIT_SHA"
 expect_fail "malformed CI_COMMIT_SHA fails" "$TMP/good" "" "not-a-sha" "CI_COMMIT_SHA"
 expect_fail "missing chart dir argument fails" "" "" "$SHA" "usage"
+expect_fail "CI_COMMIT_SHORT_SHA not matching CI_COMMIT_SHA fails" "$TMP/good" "" "$SHA" "not a prefix" "deadbeef"
+expect_fail "malformed CI_COMMIT_SHORT_SHA fails" "$TMP/good" "" "$SHA" "7-40 hex" "1a2b"
 
 # End-to-end with real helm when available: derived version must be accepted by helm package.
 if command -v helm >/dev/null 2>&1; then
@@ -84,7 +94,7 @@ if command -v helm >/dev/null 2>&1; then
     eval "$OUT"
     if helm package "$TMP/platform" --version "$CHART_VERSION" --app-version "$CHART_APP_VERSION" -d "$TMP/out" >/dev/null 2>&1 \
        && [ -f "$TMP/out/platform-0.4.0-g1a2b3c4d.tgz" ] \
-       && helm show chart "$TMP/out/platform-0.4.0-g1a2b3c4d.tgz" | grep -q "appVersion: $SHA"; then
+       && helm show chart "$TMP/out/platform-0.4.0-g1a2b3c4d.tgz" | grep -q "appVersion: 1a2b3c4d"; then
       ok "helm package accepts derived version/appVersion"
     else
       bad "helm package accepts derived version/appVersion"
