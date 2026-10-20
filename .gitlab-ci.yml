@@ -42,6 +42,15 @@ lint:
 
 test:
   stage: test
+  # Gateway integration tests run against a real Postgres (no DB mocks).
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: test
+    POSTGRES_PASSWORD: test-only-not-a-secret
+    POSTGRES_DB: test
+    TEST_DATABASE_URL: postgres://test:test-only-not-a-secret@postgres:5432/test
   script:
     - npm ci --cache .npm --prefer-offline
     - npm test

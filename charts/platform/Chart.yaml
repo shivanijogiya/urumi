@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platform
+description: Urumi platform — WooCommerce store (WordPress + MariaDB) and the MCP gateway stack (gateway + Postgres).
+type: application
+version: 0.1.0
+appVersion: 0.1.0

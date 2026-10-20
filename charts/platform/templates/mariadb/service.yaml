@@ -1,0 +1,34 @@
+{{- if .Values.mariadb.enabled }}
+{{- $ctx := dict "ctx" $ "component" "mariadb" }}
+# Headless Service: stable pod DNS for the StatefulSet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.componentName" $ctx }}-headless
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "platform.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+# ClusterIP Service clients connect to (WordPress). Internal only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+{{- end }}

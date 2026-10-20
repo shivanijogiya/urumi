@@ -1,0 +1,180 @@
+# Defaults for the urumi platform chart. values-local.yaml (k3d) and values-prod.yaml (VPS)
+# override these; both environments use the same templates.
+
+nameOverride: ''
+# Resource name prefix. Defaults to the release name, e.g. urumi-mariadb, urumi-wordpress.
+fullnameOverride: ''
+
+# Name of an EXISTING Secret that holds every credential. The chart only references it
+# (secretKeyRef) and never creates it, so no secret value ever lives in a values file.
+#   local: scripts/cluster-up.sh -> scripts/secrets-apply.sh creates it from .env.local
+#   prod:  create it out-of-band before installing, e.g.
+#          kubectl -n urumi create secret generic urumi-env --from-env-file=<your env file>
+secretName: urumi-env
+
+ingress:
+  # IngressClass for every Ingress in the chart. k3s ships Traefik.
+  className: traefik
+
+# Public storefront (WordPress + WooCommerce).
+store:
+  host: store.localtest.me
+  # Base URL WordPress uses for WP_HOME / WP_SITEURL. Empty = http(s)://<host>
+  # (https when tls.enabled).
+  url: ''
+  tls:
+    enabled: false
+    # TLS Secret for the host (e.g. issued by cert-manager); not created by this chart.
+    secretName: ''
+
+mariadb:
+  enabled: true
+  image:
+    repository: mariadb
+    tag: '11.4'
+    pullPolicy: IfNotPresent
+  database: wordpress
+  user: wordpress
+  # Keys inside `secretName`.
+  secretKeys:
+    password: MARIADB_PASSWORD
+    rootPassword: MARIADB_ROOT_PASSWORD
+  persistence:
+    size: 2Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+wordpress:
+  enabled: true
+  image:
+    repository: wordpress
+    tag: 6-php8.3-apache
+    pullPolicy: IfNotPresent
+  # DB host:port. Empty = the chart's MariaDB Service on 3306.
+  databaseHost: ''
+  persistence:
+    # Holds the whole docroot (/var/www/html): WordPress core, wp-config.php and wp-content.
+    size: 2Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 768Mi
+
+# Post-install/post-upgrade Helm hook Job that makes the store usable (W4, K6): installs WordPress,
+# installs + configures WooCommerce (INR, COD, public storefront, demo product), creates the API
+# user and its Application Password, and stores it ONLY in the Secret `apiSecretName`.
+# Idempotent: every run checks state first; a still-working Application Password is kept.
+bootstrap:
+  enabled: true
+  # WP_ENVIRONMENT_TYPE for WordPress (also used by the Deployment). Application Passwords only
+  # work over HTTPS unless this is `local`. With `production`, in-cluster plain-HTTP API calls must
+  # send `X-Forwarded-Proto: https` (the official image's wp-config.php trusts it); the Job does.
+  environmentType: production
+  storeTitle: Urumi Store
+  # Keys inside `secretName` for the WordPress administrator (used only by `wp core install`).
+  secretKeys:
+    adminUser: WP_ADMIN_USER
+    adminPassword: WP_ADMIN_PASSWORD
+    adminEmail: WP_ADMIN_EMAIL
+  woocommerce:
+    # Pinned and enforced on every run. Downloaded from wordpress.org, so the Job needs egress.
+    # 11.1+ requires WordPress 7.0; the wordpress image tag above is 6.x.
+    version: 11.0.1
+    currency: INR
+    # "country:state" for the store address.
+    defaultCountry: IN:DL
+  # Dedicated least-privilege (shop_manager) user that owns the Application Password.
+  apiUser: woo-mcp
+  # Secret written by the Job (keys WOO_URL, WOO_USER, WOO_APP_PASSWORD). Not rendered by the chart.
+  apiSecretName: urumi-woo-api
+  # WOO_URL stored in the Secret. Empty = the in-cluster WordPress Service URL.
+  wooUrl: ''
+  wpCli:
+    image:
+      repository: wordpress
+      tag: cli-2.12.0-php8.3
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
+  kubectl:
+    image:
+      repository: alpine/k8s
+      tag: 1.35.9
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+# Gateway database (K3, K4). Only the gateway connects to it.
+postgres:
+  enabled: true
+  # Ingress to Postgres only from gateway pods.
+  networkPolicy:
+    enabled: true
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  database: gateway
+  user: gateway
+  # Keys inside `secretName`.
+  secretKeys:
+    password: POSTGRES_PASSWORD
+  persistence:
+    size: 1Gi
+    # Empty = the cluster's default StorageClass.
+    storageClass: ''
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# MCP gateway + admin API. Runs migrations and seeds the first admin on start.
+gateway:
+  enabled: true
+  image:
+    repository: registry.gitlab.com/<group>/<project>/gateway
+    # Empty = the chart's appVersion.
+    tag: ''
+    pullPolicy: IfNotPresent
+  database:
+    # Postgres host. Empty = the chart's Postgres Service.
+    host: ''
+    port: 5432
+  # Env var -> key inside `secretName`. The DB password comes from postgres.secretKeys.password.
+  secretKeys:
+    SEED_ADMIN_EMAIL: SEED_ADMIN_EMAIL
+    SEED_ADMIN_PASSWORD: SEED_ADMIN_PASSWORD
+    GATEWAY_ENC_KEY: GATEWAY_ENC_KEY
+    GATEWAY_SESSION_SECRET: GATEWAY_SESSION_SECRET
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

@@ -1,7 +1,14 @@
+# Build context is the repo root; send only what the Dockerfiles copy.
 **/node_modules
-.git
-.env*
-**/.env*
 **/dist
 **/coverage
+.git
 .hermes
+.env*
+**/.env*
+*.log
+.DS_Store
+charts
+docs
+tests
+scripts

@@ -1,0 +1,194 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $ctx := dict "ctx" $ "component" "bootstrap" }}
+{{- $name := include "platform.componentName" $ctx }}
+{{- $v := .Values.bootstrap }}
+{{- $wpName := include "platform.componentName" (dict "ctx" $ "component" "wordpress") }}
+# Store bootstrap (W4, K6). Runs after every install/upgrade, once WordPress is up:
+#   initContainer `wp`      WP-CLI on the WordPress docroot: install core + WooCommerce, configure
+#                           the store, create the API user and (only if needed) a new
+#                           Application Password, written to an in-memory file.
+#   container `publish`     kubectl: applies the Secret `apiSecretName` from that file and checks
+#                           that the password authenticates against /wp-json/wc/v3/orders.
+# Both scripts are idempotent and never print a secret.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    # Keep the last run (and its logs) until the next hook run or the TTL below.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" $ctx | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      # The API token is projected into the kubectl container only (volume kube-api-access),
+      # so the WP-CLI container, which downloads code from wordpress.org, never sees it.
+      automountServiceAccountToken: false
+      securityContext:
+        # The debian `wordpress` image owns the docroot as www-data (33); the alpine CLI image's
+        # www-data is 82, so both containers run as 33 to read/write the same files.
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wp
+          image: "{{ $v.wpCli.image.repository }}:{{ $v.wpCli.image.tag }}"
+          imagePullPolicy: {{ $v.wpCli.image.pullPolicy }}
+          command: ["bash", "/scripts/bootstrap.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            {{- include "platform.wordpressEnv" . | nindent 12 }}
+            - name: HOME
+              value: /tmp
+            - name: WP_CLI_CONFIG_PATH
+              value: /scripts/wp-cli.yml
+            - name: WP_CLI_CACHE_DIR
+              value: /tmp/wp-cli-cache
+            - name: STORE_URL
+              value: {{ include "platform.storeUrl" . | quote }}
+            - name: STORE_TITLE
+              value: {{ $v.storeTitle | quote }}
+            - name: WOO_VERSION
+              value: {{ required "bootstrap.woocommerce.version is required" $v.woocommerce.version | quote }}
+            - name: WOO_CURRENCY
+              value: {{ $v.woocommerce.currency | quote }}
+            - name: WOO_DEFAULT_COUNTRY
+              value: {{ $v.woocommerce.defaultCountry | quote }}
+            - name: WOO_URL
+              value: {{ include "platform.wooUrl" . | quote }}
+            - name: WOO_USER
+              value: {{ $v.apiUser | quote }}
+            - name: WOO_USER_EMAIL
+              value: {{ printf "%s@%s" $v.apiUser .Values.store.host | quote }}
+            - name: WP_ENVIRONMENT_TYPE
+              value: {{ $v.environmentType | quote }}
+            - name: WP_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.secretKeys.adminUser }}
+            - name: WP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.secretKeys.adminPassword }}
+            - name: WP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: {{ $v.secretKeys.adminEmail }}
+          resources:
+            {{- toYaml $v.wpCli.resources | nindent 12 }}
+          volumeMounts:
+            # Same PVC as the WordPress pod; its local-path PV's node affinity schedules this pod
+            # onto WordPress's node.
+            - name: docroot
+              mountPath: /var/www/html
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: existing
+              mountPath: /existing
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: publish
+          image: "{{ $v.kubectl.image.repository }}:{{ $v.kubectl.image.tag }}"
+          imagePullPolicy: {{ $v.kubectl.image.pullPolicy }}
+          command: ["bash", "/scripts/publish-secret.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: SECRET_NAME
+              value: {{ $v.apiSecretName | quote }}
+            - name: WOO_URL
+              value: {{ include "platform.wooUrl" . | quote }}
+            - name: WOO_USER
+              value: {{ $v.apiUser | quote }}
+            - name: WP_ENVIRONMENT_TYPE
+              value: {{ $v.environmentType | quote }}
+            - name: SECRET_LABELS
+              value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=woo-api" (include "platform.name" .) .Release.Name | quote }}
+          resources:
+            {{- toYaml $v.kubectl.resources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: existing
+              mountPath: /existing
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: docroot
+          persistentVolumeClaim:
+            claimName: {{ $wpName }}-wp-content
+        - name: scripts
+          configMap:
+            name: {{ $name }}
+        # The current API Secret, if any: lets the WP-CLI step keep a password that still works.
+        - name: existing
+          secret:
+            secretName: {{ $v.apiSecretName }}
+            optional: true
+            defaultMode: 0440
+        # Hands a new Application Password from `wp` to `publish`; RAM only, gone with the pod.
+        - name: shared
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        # What automountServiceAccountToken would mount, scoped to one container.
+        - name: kube-api-access
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+{{- end }}

@@ -1,0 +1,43 @@
+# Local k3d cluster (scripts/cluster-up.sh).
+#   helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
+
+secretName: urumi-env
+
+ingress:
+  className: traefik
+
+store:
+  # *.localtest.me resolves to 127.0.0.1; k3d maps host port 80 to Traefik.
+  host: store.localtest.me
+  url: http://store.localtest.me
+  tls:
+    enabled: false
+
+mariadb:
+  persistence:
+    size: 2Gi
+    storageClass: local-path
+
+wordpress:
+  persistence:
+    size: 2Gi
+    storageClass: local-path
+
+bootstrap:
+  enabled: true
+  # Plain HTTP locally: Application Passwords need `local` (or HTTPS).
+  environmentType: local
+  storeTitle: Urumi Store (local)
+
+postgres:
+  persistence:
+    size: 1Gi
+    storageClass: local-path
+
+gateway:
+  image:
+    # Pushed by scripts/build-images.sh to localhost:5005; the k3d nodes pull it by this name.
+    repository: k3d-urumi-registry.localhost:5005/urumi-gateway
+    tag: dev
+    # :dev is rebuilt in place; always pull the latest push.
+    pullPolicy: Always
