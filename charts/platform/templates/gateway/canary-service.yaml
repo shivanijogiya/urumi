@@ -1,0 +1,19 @@
+{{- if and .Values.gateway.enabled .Values.gatewayCanary.enabled }}
+{{- $ctx := dict "ctx" $ "component" "gateway-canary" }}
+# Canary pods only (#23). The stable Service (service.yaml) selects component=gateway, so the two
+# never share pods; the split between them is the IngressRoute's weights (app-ingressroute.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+{{- end }}

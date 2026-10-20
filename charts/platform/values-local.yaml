@@ -75,3 +75,7 @@ gateway:
   publicOrigin: http://app.localtest.me
   cookieSecure: false
   chatModel: claude-sonnet-5-5
+
+# Canary (#23): switched on/off per run by scripts/canary/run.sh (helm --reset-then-reuse-values).
+gatewayCanary:
+  enabled: false

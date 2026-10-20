@@ -267,3 +267,29 @@ gateway:
     limits:
       cpu: 500m
       memory: 256Mi
+
+# Canary of the gateway (#23, H2; docs/adr/003-canary.md). Off by default; driven by
+# scripts/canary/run.sh, decided by scripts/canary/verdict.py. When enabled: a second Deployment
+# <release>-gateway-canary (the stable pod template, 1 replica, image tag below, label
+# track=canary) with its own Service, and a Traefik IngressRoute (traefik.io/v1alpha1, shipped
+# with k3s) that sends `weight` % of /api and /mcp on app.host to it. Same Postgres as stable.
+gatewayCanary:
+  enabled: false
+  # Percent of /api + /mcp requests the canary receives (0..100); the stable gateway gets the rest.
+  weight: 20
+  image:
+    # Empty = gateway.image.repository.
+    repository: ''
+    # Required when enabled.
+    tag: ''
+    # Empty = gateway.image.pullPolicy.
+    pullPolicy: ''
+  # FORCED BAD RELEASE demo only: FAULT_INJECT_ERROR_RATE (0..1) of tools/call requests fail with a
+  # 500 and FAULT_INJECT_LATENCY_MS delays each one, on the canary pod only. 0 = off.
+  faultInject:
+    errorRate: 0
+    latencyMs: 0
+  # Traefik entry points of the IngressRoute. Empty = [websecure] when app.tls.enabled, else [web].
+  entryPoints: []
+  # Router priority: above the app Ingress's rules (Traefik's default is the rule length).
+  priority: 1000

@@ -8,7 +8,8 @@
 #   - no `kind: Secret` is rendered (the chart only references an existing Secret)
 #   - at least one workload is rendered (guards against an empty render passing silently)
 # YAML -> JSON uses `kubectl annotate --local` (no API server); node does the assertions.
-# Prints PASS/FAIL per values file; exits non-zero if any check fails.
+# Each values file is rendered as is and with the gateway canary enabled (+canary).
+# Prints PASS/FAIL per variant; exits non-zero if any check fails.
 # Extra arguments go to `helm template` (e.g. to prove a check fails: --set mariadb.resources=null).
 #   tests/infra/chart-checks.sh [helm template args...]
 set -euo pipefail
@@ -63,9 +64,14 @@ process.exit(problems.length ? 1 : 0);
 '
 
 failed=0
-for values in values-local.yaml values-prod.yaml; do
-  name="chart-checks ($values)"
-  if ! rendered=$(helm template urumi "$CHART" -n urumi -f "$CHART/$values" "$@" 2>&1); then
+# <values file>[+canary]: +canary also renders the gateway canary (#23) with a fault injected.
+for variant in values-local.yaml values-prod.yaml values-local.yaml+canary values-prod.yaml+canary; do
+  values=${variant%+canary}
+  extra=""
+  [ "$variant" = "$values" ] || extra="--set gatewayCanary.enabled=true --set gatewayCanary.image.tag=c1 --set gatewayCanary.faultInject.errorRate=0.5"
+  name="chart-checks ($variant)"
+  # shellcheck disable=SC2086 # $extra is a list of flags
+  if ! rendered=$(helm template urumi "$CHART" -n urumi -f "$CHART/$values" $extra "$@" 2>&1); then
     echo "$rendered"
     echo "FAIL $name: helm template failed"
     failed=1
