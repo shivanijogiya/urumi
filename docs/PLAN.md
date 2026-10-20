@@ -84,9 +84,9 @@ Expected gate routing:
 | # | Risk | Status | Fallback |
 |---|---|---|---|
 | 1 | GitLab MCP accepts a static bearer | **Checked 20 Oct.** `POST https://gitlab.com/api/v4/mcp` with the current PAT → `403 insufficient_granular_scope: requires fine-grained PAT with MCP tool: Execute`. So static bearer works with the right token type. Need a dedicated fine-grained PAT from Aadi. | Public no-auth MCP server (DeepWiki `https://mcp.deepwiki.com/mcp`) |
-| 2 | k3d runs inside GitLab CI (DinD) | To verify 21 Oct with a throwaway branch job | e2e + canary run on a project runner on the Mac (or VPS) |
-| 3 | Application Password works with WooCommerce REST | Verified in #5 acceptance (REST `/wc/v3/orders` → 200) | WooCommerce consumer key/secret over HTTP basic (in-cluster only) |
-| 4 | Duo custom agents can use external MCP servers in the hackathon group | To verify 21 Oct | `verdict.py` calls the gateway from CI; the Duo flow reads its output artifact |
+| 2 | k3d runs inside GitLab CI (DinD) | **Verified 20 Oct.** Shared runner, `docker:27-dind`: k3d v5.9 cluster Ready, Traefik rolled out, pods scheduled; 86 s job (pipeline 2965520038, branch `spike/k3d-dind`). | e2e + canary run on a project runner on the Mac (or VPS) |
+| 3 | Application Password works with WooCommerce REST | **Verified 20 Oct** in #5 (!6): WooCommerce 11.0.1, `GET /wc/v3/orders` → 200, wrong password → 401. Needs `WP_ENVIRONMENT_TYPE=local` over HTTP; prod over HTTPS. | WooCommerce consumer key/secret over HTTP basic (in-cluster only) |
+| 4 | Duo custom agents can use external MCP servers in the hackathon group | **Docs checked 20 Oct:** external MCP servers for custom agents are beta, Premium/Ultimate, configured in the AI Catalog. Moot without a public gateway (VPS is cut-first), so **plan on the fallback**. | `verdict.py` calls the gateway from CI; the Duo flow reads its output artifact |
 | 5 | Schedule (one day behind) | Active | Cut order in §4 |
 | 6 | Anthropic API key / credits for chat (D2, D4) | Needs Aadi | none: D2/D4 require a working LLM |
 
