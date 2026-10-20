@@ -7,15 +7,17 @@
 #      without the GitLab upstream)
 #   5. deploys this commit as the canary (scripts/canary/run.sh deploy); CANARY_FORCE_BAD=1 injects
 #      FAULT_INJECT_ERROR_RATE=$CANARY_BAD_ERROR_RATE (default 0.5) into the canary only
-#   6. scripts/canary/verdict.py decides; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> run.sh rollback
+#   6. scripts/canary/verdict.py decides; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> rollback.
+#      A PROMOTE of a high-risk change (RISK, scripts/canary/risk.py) is not promoted: the canary
+#      is rolled back and DECISION=PROMOTE_PENDING_APPROVAL waits for release:human-approval
 #   7. writes verdict.json (verdict.py's report + decision, timeline, CI links) and verdict.env
-#      (VERDICT=..., DECISION=..., CANARY_ACTION=...) in the repo root, and prints the report as one
-#      `CANARY_VERDICT_JSON: {...}` log line for the incident flow (.gitlab/flows/incident.yaml)
-# Exit 0 only when the release was accepted (PROMOTE promoted). Exit 1 on ROLLBACK ("RELEASE
-# REJECTED: canary rolled back", so the pipeline fails and the incident flow's Pipeline Failed
-# trigger fires), on HOLD (no decision possible), on any setup failure, and when CANARY_FORCE_BAD=1
-# was not rolled back. A forced bad release therefore always fails the job: read DECISION / the
-# log to tell a drill that worked (ROLLBACK) from one that did not.
+#      (VERDICT=..., DECISION=..., CANARY_ACTION=...) in the repo root, and prints the report as
+#      one `CANARY_VERDICT_JSON: {...}` log line for the incident flow (.gitlab/flows/incident.yaml)
+# Exit 0 only on PROMOTE (promoted, or pending approval when high risk). Exit 1 on ROLLBACK
+# ("RELEASE REJECTED: canary rolled back", so the pipeline fails and the incident flow's Pipeline
+# Failed trigger fires), on HOLD (no decision possible), on any setup failure, and when
+# CANARY_FORCE_BAD=1 was not rolled back. A forced bad release therefore always fails the job:
+# DECISION and the log tell a drill that worked (ROLLBACK) from one that did not.
 #
 # Env:
 #   CANARY_FORCE_BAD        1 = forced bad release
@@ -23,6 +25,7 @@
 #   CANARY_INGRESS_IP       map app/store.localtest.me to this IP in /etc/hosts (DinD: docker's IP)
 #   CANARY_TAG              canary image tag, default canary-<git short sha>
 #   K3D_KEEP                1 = keep an existing cluster `urumi` (default: create, fail if it exists)
+#   RISK                    low|high from risk:classify; unset = run risk.py here; other = high
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/../lib/common.sh"
@@ -37,6 +40,15 @@ KEY_FILE="$ROOT/tests/e2e/.out/userb2.key"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 for c in docker k3d kubectl helm node jq curl python3 openssl git; do need "$c" "Install $c"; done
+
+# Release risk (#24): CI passes RISK from risk:classify's dotenv; elsewhere classify here. Anything
+# but an explicit `low` is high (fail closed): a PROMOTE then waits for release:human-approval.
+if [ -z "${RISK:-}" ]; then
+  python3 "$ROOT/scripts/canary/risk.py" --out "$ROOT/risk.json" --env "$ROOT/risk.env" || true
+  RISK=$(sed -n 's/^RISK=//p' "$ROOT/risk.env" 2>/dev/null || true)
+fi
+[ "$RISK" = low ] || RISK=high
+say "release risk: $RISK"
 
 say "1/7 k3d cluster $CLUSTER_NAME"
 if k3d cluster get "$CLUSTER_NAME" >/dev/null 2>&1; then
@@ -100,6 +112,10 @@ case "$code" in
   *) die "verdict.py failed (exit $code)" ;;
 esac
 decision=$verdict
+if [ "$verdict" = PROMOTE ] && [ "$RISK" != low ]; then
+  # High-risk change: the verdict is recorded but nothing is promoted without a person.
+  decision=PROMOTE_PENDING_APPROVAL action=rolled-back-pending-approval
+fi
 if [ "$decision" = PROMOTE ]; then
   IMAGE_MODE=none "$ROOT/scripts/canary/run.sh" promote "$CANARY_TAG"
 else
@@ -110,7 +126,7 @@ printf 'VERDICT=%s\nDECISION=%s\nCANARY_ACTION=%s\nCANARY_TAG=%s\n' \
   "$verdict" "$decision" "$action" "$CANARY_TAG" >"$VERDICT_ENV"
 # Record the decision next to the measurements (record.jq).
 jq -f "$ROOT/scripts/canary/record.jq" --arg decision "$decision" --arg action "$action" \
-  --arg tag "$CANARY_TAG" --arg force_bad "$CANARY_FORCE_BAD" --arg risk "${RISK:-}" \
+  --arg tag "$CANARY_TAG" --arg force_bad "$CANARY_FORCE_BAD" --arg risk "$RISK" \
   --arg weight "${CANARY_WEIGHT:-20}" --arg live "$canary_live_at" --arg verdict_at "$verdict_at" \
   --arg applied "$applied_at" --arg pipeline_id "${CI_PIPELINE_ID:-}" \
   --arg pipeline_url "${CI_PIPELINE_URL:-}" --arg job_name "${CI_JOB_NAME:-}" \
@@ -132,4 +148,7 @@ fi
 if [ "$verdict" = ROLLBACK ]; then
   [ "$CANARY_FORCE_BAD" != 1 ] || warn "forced bad release drill: ROLLBACK is the expected outcome"
   die "RELEASE REJECTED: canary rolled back"
+fi
+if [ "$decision" = PROMOTE_PENDING_APPROVAL ]; then
+  say "HIGH RISK: verdict PROMOTE, not promoted. A person must run release:human-approval."
 fi

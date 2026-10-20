@@ -6,6 +6,12 @@ coverage/
 !.env.example
 .hermes/
 tests/e2e/.out/
+# Canary / release-gate outputs (scripts/canary/ci.sh, risk.py, approval.py)
+/verdict.json
+/verdict.env
+/risk.json
+/risk.env
+/approval.json
 docs/.issue-map.json
 *.log
 .DS_Store
