@@ -51,7 +51,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export function buildApp(deps: AppDeps): FastifyInstance {
   const options: FastifyServerOptions = {
     logger: deps.logger ?? false,
-    trustProxy: deps.trustProxy ?? false,
+    trustProxy: toTrustProxy(deps.trustProxy),
   };
   const app = Fastify(options);
   app.decorate('pool', deps.pool);
@@ -101,4 +101,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerKeyRoutes(app);
 
   return app;
+}
+
+/** Fastify's types reject a hop count; express it as the equivalent function (trust the first n hops). */
+function toTrustProxy(
+  v: boolean | number | undefined,
+): boolean | ((addr: string, hop: number) => boolean) {
+  if (typeof v === 'number') return (_addr, hop) => hop < v;
+  return v ?? false;
 }
