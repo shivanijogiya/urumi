@@ -1,7 +1,7 @@
 // Real MCP servers for the aggregation tests: the SDK McpServer on Streamable HTTP (stateless,
 // JSON responses) over node:http on an ephemeral 127.0.0.1 port. Variants are options: delays in
-// tools/list or in a tool, a required bearer, custom tool lists. `stop()` + `start()` on the same
-// port simulates a dead upstream coming back.
+// tools/list or in a tool, a required bearer, custom tool lists, failing calls. `stop()` +
+// `start()` on the same port simulates a dead upstream coming back.
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -27,6 +27,8 @@ export interface FakeUpstreamOptions {
   requireBearer?: string;
   /** Pads every tool result's text with this many extra characters (oversized results). */
   resultPadding?: number;
+  /** Tool calls fail: 'throw' answers with a JSON-RPC error, 'isError' with an isError result. */
+  callFails?: 'throw' | 'isError';
 }
 
 export interface FakeUpstream {
@@ -66,6 +68,10 @@ function mcpServer(opts: FakeUpstreamOptions, calls: FakeUpstream['calls']): Mcp
   mcp.server.setRequestHandler(CallToolRequestSchema, async (req) => {
     calls.push({ name: req.params.name, args: req.params.arguments });
     if (opts.callDelayMs) await sleep(opts.callDelayMs);
+    if (opts.callFails === 'throw') throw new Error(`${opts.identity} failed`);
+    if (opts.callFails === 'isError') {
+      return { content: [{ type: 'text', text: 'tool reported an error' }], isError: true };
+    }
     const text = JSON.stringify({
       server: opts.identity,
       tool: req.params.name,

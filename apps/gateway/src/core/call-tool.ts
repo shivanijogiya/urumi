@@ -39,15 +39,19 @@ export interface CallRecord {
   userId: string;
   apiKeyId: string | null;
   source: CallSource;
-  /** Parsed slug; '' if the name was not qualified. */
+  /** Parsed slug; 'unknown' if the name was not qualified. */
   serverSlug: string;
   /** The upstream's tool name if resolved, else the requested tool part (capped). */
   tool: string;
   startedAt: Date;
   durationMs: number;
   outcome: Outcome;
+  /** Null only for 'ok'; an isError result is UPSTREAM_ERROR (returned to the caller as is). */
   errorCode: ErrorCode | null;
 }
+
+/** serverSlug of a call whose name does not parse as `{slug}__{tool}`. */
+export const UNKNOWN_SLUG = 'unknown';
 
 export type CallTool = (
   userId: string,
@@ -127,7 +131,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       userId,
       apiKeyId: opts.apiKeyId ?? null,
       source: opts.source,
-      serverSlug: parsed?.slug ?? '',
+      serverSlug: parsed?.slug ?? UNKNOWN_SLUG,
       tool: String(parsed?.toolPart ?? qualifiedName).slice(0, MAX_NAME_LEN),
       startedAt,
       durationMs: 0,
@@ -162,7 +166,12 @@ export function createCallTool(deps: CallToolDeps): CallTool {
         );
         throw new GatewayError('UPSTREAM_ERROR', 'Tool result too large');
       }
-      record.outcome = result.isError ? 'error' : 'ok';
+      if (result.isError) {
+        record.outcome = 'error';
+        record.errorCode = 'UPSTREAM_ERROR';
+      } else {
+        record.outcome = 'ok';
+      }
       return result;
     } catch (err) {
       record.errorCode = err instanceof HttpError ? err.code : 'INTERNAL';
@@ -170,7 +179,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       throw err;
     } finally {
       record.durationMs = Date.now() - startedAt.getTime();
-      // ── AUDIT HOOK: #16 writes the audit_log row here. No audit table writes in #13. ──
+      // Audit hook: the audit_log row is written here (src/audit/hook.ts), before the caller resumes.
       if (deps.onCallFinished) {
         try {
           await deps.onCallFinished(record);

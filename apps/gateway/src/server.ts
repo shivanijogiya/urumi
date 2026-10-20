@@ -1,6 +1,8 @@
 import { httpStatusFor, makeError } from '@urumi/contracts';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import type pg from 'pg';
+import { createAuditWriter } from './audit/hook.js';
+import { registerAuditRoutes } from './audit/routes.js';
 import { IP_MAX_FAILURES, LoginLimiter } from './auth/login-limiter.js';
 import { registerAuthRoutes } from './auth/routes.js';
 import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
@@ -49,7 +51,7 @@ export interface AppDeps {
   lookup?: LookupFn;
   /** Upstream timeouts; default MCP_TIMEOUTS (list 3 s, call 15 s). Tests shorten them. */
   mcpTimeouts?: { listMs?: number; callMs?: number };
-  /** Audit hook for every finished callTool (#16 writes the audit row). */
+  /** Extra observer of every finished callTool, after its audit_log row is written. */
   onCallFinished?: (record: CallRecord) => void | Promise<void>;
 }
 
@@ -140,13 +142,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     log: app.log,
     ...(deps.mcpTimeouts?.listMs ? { listTimeoutMs: deps.mcpTimeouts.listMs } : {}),
   });
+  const writeAudit = createAuditWriter(deps.pool, app.log);
   const callTool = createCallTool({
     pool: deps.pool,
     registry,
     client,
     log: app.log,
     ...(deps.mcpTimeouts?.callMs ? { callTimeoutMs: deps.mcpTimeouts.callMs } : {}),
-    ...(deps.onCallFinished ? { onCallFinished: deps.onCallFinished } : {}),
+    onCallFinished: async (record) => {
+      await writeAudit(record);
+      await deps.onCallFinished?.(record);
+    },
   });
   app.decorate('tools', { registry, callTool });
 
@@ -154,6 +160,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerKeyRoutes(app);
   registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
   registerToolRoutes(app, registry);
+  registerAuditRoutes(app);
 
   return app;
 }
