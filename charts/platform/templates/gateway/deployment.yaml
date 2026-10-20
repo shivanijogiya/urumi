@@ -41,6 +41,10 @@ spec:
           env:
             - name: PORT
               value: "8080"
+            - name: PUBLIC_ORIGIN
+              value: {{ $v.publicOrigin | quote }}
+            - name: COOKIE_SECURE
+              value: {{ $v.cookieSecure | quote }}
             # Migrations run on start; concurrent starts are serialised by an advisory lock.
             - name: PGHOST
               value: {{ include "platform.postgresHost" . | quote }}

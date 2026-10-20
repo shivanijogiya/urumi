@@ -45,3 +45,6 @@ gateway:
     repository: registry.gitlab.com/<group>/<project>/gateway
     tag: ''
     pullPolicy: IfNotPresent
+  # Replace with the dashboard's HTTPS origin.
+  publicOrigin: https://app.example.com
+  cookieSecure: true

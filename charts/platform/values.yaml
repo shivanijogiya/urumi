@@ -165,6 +165,11 @@ gateway:
     # Postgres host. Empty = the chart's Postgres Service.
     host: ''
     port: 5432
+  # Dashboard origin (scheme://host, no path). State-changing /api requests whose Origin header
+  # differs are refused (CSRF).
+  publicOrigin: http://app.localtest.me
+  # Mark the session cookie Secure. Turn on when the dashboard is served over HTTPS.
+  cookieSecure: false
   # Env var -> key inside `secretName`. The DB password comes from postgres.secretKeys.password.
   secretKeys:
     SEED_ADMIN_EMAIL: SEED_ADMIN_EMAIL
