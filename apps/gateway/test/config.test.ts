@@ -46,6 +46,35 @@ describe('loadConfig', () => {
     expect(c.trustProxy).toBe(true);
   });
 
+  it('leaves canary track and fault injection off by default', () => {
+    const c = loadConfig(valid);
+    expect(c.track).toBeNull();
+    expect(c.faultInject).toEqual({ errorRate: 0, latencyMs: 0 });
+  });
+
+  it('parses TRACK, FAULT_INJECT_ERROR_RATE and FAULT_INJECT_LATENCY_MS', () => {
+    const c = loadConfig({
+      ...valid,
+      TRACK: 'canary',
+      FAULT_INJECT_ERROR_RATE: '0.5',
+      FAULT_INJECT_LATENCY_MS: '250',
+    });
+    expect(c.track).toBe('canary');
+    expect(c.faultInject).toEqual({ errorRate: 0.5, latencyMs: 250 });
+    expect(loadConfig({ ...valid, FAULT_INJECT_ERROR_RATE: '' }).faultInject.errorRate).toBe(0);
+    for (const [name, bad] of [
+      ['TRACK', 'Canary!'],
+      ['FAULT_INJECT_ERROR_RATE', '1.5'],
+      ['FAULT_INJECT_ERROR_RATE', '-0.1'],
+      ['FAULT_INJECT_ERROR_RATE', 'half'],
+      ['FAULT_INJECT_LATENCY_MS', '-1'],
+      ['FAULT_INJECT_LATENCY_MS', '1.5'],
+      ['FAULT_INJECT_LATENCY_MS', '60000'],
+    ] as const) {
+      expect(errorFor({ ...valid, [name]: bad }).message).toContain(name);
+    }
+  });
+
   it('parses TRUST_PROXY as true, false, or a hop count', () => {
     expect(loadConfig({ ...valid, TRUST_PROXY: 'false' }).trustProxy).toBe(false);
     expect(loadConfig({ ...valid, TRUST_PROXY: 'true' }).trustProxy).toBe(true);

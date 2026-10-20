@@ -90,6 +90,24 @@ const EnvSchema = z.object({
       .default(DEFAULT_CHAT_MODEL)
       .refine((v) => /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,99}$/.test(v), 'must be a model id'),
   ),
+  // Canary (#23): x-urumi-track response header, and fault injection for the forced-bad-release
+  // demo only (see src/http/canary.ts). All unset in a normal install.
+  TRACK: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[a-z][a-z0-9-]{0,19}$/, 'must be a lowercase label such as stable or canary')
+      .optional(),
+  ),
+  FAULT_INJECT_ERROR_RATE: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().min(0).max(1).default(0),
+  ),
+  // Below the 15 s tool-call timeout, so an injected delay never looks like a hang.
+  FAULT_INJECT_LATENCY_MS: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(15_000).default(0),
+  ),
 });
 
 /** Needed unless DATABASE_URL is set. Checked outside zod so they are reported with other errors. */
@@ -116,6 +134,10 @@ export interface Config {
   /** ANTHROPIC_API_KEY, or null when chat is not configured. Never logged. */
   anthropicApiKey: string | null;
   chatModel: string;
+  /** TRACK: value of the x-urumi-track response header, or null (no header). */
+  track: string | null;
+  /** Fault injection (forced-bad-release demo). Zero = off. */
+  faultInject: { errorRate: number; latencyMs: number };
 }
 
 export class ConfigError extends Error {
@@ -160,6 +182,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     upstreamAllowedHosts: e.UPSTREAM_ALLOWED_HOSTS,
     anthropicApiKey: e.ANTHROPIC_API_KEY ?? null,
     chatModel: e.CHAT_MODEL,
+    track: e.TRACK ?? null,
+    faultInject: { errorRate: e.FAULT_INJECT_ERROR_RATE, latencyMs: e.FAULT_INJECT_LATENCY_MS },
   };
 }
 

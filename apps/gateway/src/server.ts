@@ -11,6 +11,7 @@ import { registerChatRoutes } from './chat/routes.js';
 import { createChatService } from './chat/service.js';
 import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
 import { ToolRegistry } from './core/registry.js';
+import { registerCanary } from './http/canary.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
@@ -63,6 +64,10 @@ export interface AppDeps {
    * /api/chat then answers 503. Tests inject a scripted client.
    */
   chat?: { anthropic: AnthropicLike | null; model?: string };
+  /** Canary (#23): x-urumi-track header value (TRACK). Default none. */
+  track?: string | null;
+  /** Forced-bad-release demo only (FAULT_INJECT_*): see src/http/canary.ts. Default off. */
+  faultInject?: { errorRate: number; latencyMs: number };
 }
 
 /**
@@ -104,6 +109,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.decorate('cookieSecure', deps.cookieSecure ?? false);
   app.decorateRequest('user', null);
   app.decorateRequest('sessionId', null);
+  registerCanary(app, {
+    track: deps.track ?? null,
+    faultErrorRate: deps.faultInject?.errorRate ?? 0,
+    faultLatencyMs: deps.faultInject?.latencyMs ?? 0,
+  });
 
   // Probes run every few seconds; keep them out of the info log.
   app.get('/healthz', { logLevel: 'warn' }, async () => ({ status: 'ok' }));
