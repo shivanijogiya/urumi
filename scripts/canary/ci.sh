@@ -10,7 +10,9 @@
 #      woo__list_orders probe reads a realistic page, not an empty one
 #   5. deploys this commit as the canary (scripts/canary/run.sh deploy); CANARY_FORCE_BAD=1 injects
 #      FAULT_INJECT_ERROR_RATE=$CANARY_BAD_ERROR_RATE (default 0.5) into the canary only
-#   6. scripts/canary/verdict.py decides; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> rollback.
+#   6. scripts/canary/verdict.py probes while scripts/canary/shoppers.py (#29) sends AI shoppers
+#      through each track (pinned with X-Urumi-Track, values-ci.yaml); then verdict.py --report
+#      --shoppers decides from both; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> rollback.
 #      A PROMOTE of a high-risk change (RISK, scripts/canary/risk.py) is not promoted: the canary
 #      is rolled back and DECISION=PROMOTE_PENDING_APPROVAL waits for release:human-approval
 #   7. writes verdict.json (verdict.py's report + decision, timeline, CI links) and verdict.env
@@ -31,6 +33,9 @@
 #   RISK                    low|high from risk:classify; unset = run risk.py here; other = high
 #   CANARY_BASE_SHA         stable baseline commit; default: the last promoted commit, else HEAD
 #   CANARY_ORDERS           orders to seed for today, default 24
+#   ANTHROPIC_API_KEY       AI shoppers (masked CI variable); unset (fork MRs) = shoppers skipped
+#   SHOPPER_MODEL, SHOPPER_BUDGET_USD  shoppers.py's model and spend cap (default 0.50)
+#   SHOPPER_DEADLINE_S      no new shopper turn after this many seconds, default 120
 #
 # Baseline: ci.commit_sha of verdict.json from the latest successful `canary` job on the default
 # branch (job-token artifacts API; that job's decision was PROMOTE, or PROMOTE_PENDING_APPROVAL that
@@ -47,6 +52,7 @@ CANARY_TAG=${CANARY_TAG:-canary-$(git -C "$ROOT" rev-parse --short HEAD)}
 CHART="$ROOT/charts/platform"
 VERDICT_JSON="$ROOT/verdict.json"
 VERDICT_ENV="$ROOT/verdict.env"
+SHOPPERS_JSON="$ROOT/shoppers.json"
 KEY_FILE="$ROOT/tests/e2e/.out/userb2.key"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -136,9 +142,30 @@ fi
 IMAGE_MODE=import "$ROOT/scripts/canary/run.sh" deploy "$CANARY_TAG" ${fault[@]+"${fault[@]}"}
 canary_live_at=$(now)
 
-say "6/7 verdict"
+say "6/7 verdict + AI shoppers"
+# AI shoppers (#29) shop on both tracks while verdict.py probes; their deadline keeps the added
+# time under 3 min. ANTHROPIC_API_KEY reaches shoppers.py only through the environment (never
+# argv, never echoed); without it shoppers.json says {"skipped": ...} and the verdict ignores it.
+{ set +x; } 2>/dev/null
+shoppers_log=$(mktemp)
+python3 "$ROOT/scripts/canary/shoppers.py" --key-file "$KEY_FILE" --out "$SHOPPERS_JSON" \
+  --deadline-s "${SHOPPER_DEADLINE_S:-120}" >"$shoppers_log" 2>&1 &
+shoppers_pid=$!
 set +e
-python3 "$ROOT/scripts/canary/verdict.py" --key-file "$KEY_FILE" --out "$VERDICT_JSON"
+python3 "$ROOT/scripts/canary/verdict.py" --key-file "$KEY_FILE" --out "$VERDICT_JSON" >/dev/null
+probe=$?
+wait "$shoppers_pid"
+shoppers_code=$?
+set -e
+cat "$shoppers_log"
+[ "$probe" -le 2 ] || die "verdict.py failed (exit $probe)"
+if [ "$shoppers_code" != 0 ]; then
+  warn "AI shoppers failed (exit $shoppers_code): the verdict ignores them"
+  echo '{"skipped": "shoppers.py failed"}' >"$SHOPPERS_JSON"
+fi
+set +e
+python3 "$ROOT/scripts/canary/verdict.py" --report "$VERDICT_JSON" --shoppers "$SHOPPERS_JSON" \
+  --out "$VERDICT_JSON"
 code=$?
 set -e
 verdict_at=$(now)
@@ -176,6 +203,8 @@ say "7/7 result"
 echo "================================================================"
 echo " CANARY VERDICT: $verdict -> $decision, $action ($CANARY_TAG, force_bad=$CANARY_FORCE_BAD)"
 jq -r '.reasons[] | "   - " + .' "$VERDICT_JSON"
+jq -r '"   AI shoppers: " + (.shoppers.status // "absent")
+  + (if .customer_voice then ", customer voice: \"" + .customer_voice + "\"" else "" end)' "$VERDICT_JSON"
 echo "================================================================"
 # One machine-readable line for the incident flow, which reads this job's log.
 echo "CANARY_VERDICT_JSON: $(jq -c . "$VERDICT_JSON")"

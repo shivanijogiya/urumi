@@ -16,8 +16,12 @@
 # (scripts/canary/ci.sh), hence GIT_DEPTH 0. `canary:bad-release` is the same job with
 # CANARY_FORCE_BAD=1: a 50 % tools/call error rate is injected into the canary, the verdict must be
 # ROLLBACK and the job then fails on purpose (a one-click, human-initiated drill; no CI variables
-# needed). The log carries one `CANARY_VERDICT_JSON: {...}` line. Artifacts: verdict.json, dotenv
-# VERDICT=... DECISION=...
+# needed). The log carries one `CANARY_VERDICT_JSON: {...}` line. Artifacts: verdict.json,
+# shoppers.json, dotenv VERDICT=... DECISION=...
+# AI shoppers (#29, docs/adr/006-ai-shoppers.md): with the masked project variable
+# ANTHROPIC_API_KEY, Claude personas shop on both tracks during the verdict and a canary whose
+# shoppers fail far more often than stable's is rolled back. Without it (fork MRs, a protected
+# variable on an unprotected branch) shoppers.json says skipped and the verdict is unchanged.
 
 # Release risk class of this change (#24, H3): scripts/canary/risk.py diffs against the MR's merge
 # base (CI_MERGE_REQUEST_DIFF_BASE_SHA) or main's previous tip (CI_COMMIT_BEFORE_SHA; HEAD~1 when
@@ -45,7 +49,8 @@ risk:classify:
     reports:
       dotenv: risk.env
 
-# Unit tests of the canary/release scripts: verdict.py, record.jq, risk.py, approval.py.
+# Unit tests of the canary/release scripts: verdict.py, shoppers.py, record.jq, risk.py,
+# approval.py, autoheal_report.py. No Anthropic key: shoppers.py is tested against a fake API.
 canary:unit-tests:
   stage: test
   image: python:3.12-alpine
@@ -90,6 +95,7 @@ canary:
     expire_in: 30 days
     paths:
       - verdict.json
+      - shoppers.json
       - tests/e2e/.out/seed.log
     reports:
       dotenv: verdict.env
