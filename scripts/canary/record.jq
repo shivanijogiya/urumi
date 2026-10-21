@@ -10,6 +10,7 @@ def v: if . == "" then null else . end;
   risk: ($risk | v),
   canary_weight_pct: ($weight | tonumber),
   traffic: "/api and /mcp on the app host",
+  baseline: {stable_sha: $base_sha, source: $base_src},
   timeline: {canary_live_at: $live, verdict_at: $verdict_at, applied_at: $applied},
   ci: {
     pipeline_id: ($pipeline_id | v),

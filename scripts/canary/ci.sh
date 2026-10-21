@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # The CI `canary` job (#23, H2; .gitlab/ci/canary.gitlab-ci.yml), runnable anywhere with Docker:
 #   1. ephemeral k3d cluster `urumi` (ADR 000 Q9) with Traefik on port 80
-#   2. builds the gateway, woo-mcp and everything images and imports them into k3d
+#   2. builds the gateway, woo-mcp and everything images and imports them into k3d. The STABLE
+#      gateway is built from the baseline: the last promoted commit (below), so a real code change
+#      is compared with what was running before it (#28); the canary is this commit
 #   3. generates .env.local (scripts/gen-env.sh) -> Secret urumi-env; no external secrets needed
 #   4. installs the stable release (fault-free), seeds users + B's API key (tests/e2e/seed.sh
-#      without the GitLab upstream)
+#      without the GitLab upstream) and today's orders (scripts/canary/seed-orders.sh), so the
+#      woo__list_orders probe reads a realistic page, not an empty one
 #   5. deploys this commit as the canary (scripts/canary/run.sh deploy); CANARY_FORCE_BAD=1 injects
 #      FAULT_INJECT_ERROR_RATE=$CANARY_BAD_ERROR_RATE (default 0.5) into the canary only
 #   6. scripts/canary/verdict.py decides; PROMOTE -> run.sh promote, ROLLBACK/HOLD -> rollback.
@@ -26,6 +29,14 @@
 #   CANARY_TAG              canary image tag, default canary-<git short sha>
 #   K3D_KEEP                1 = keep an existing cluster `urumi` (default: create, fail if it exists)
 #   RISK                    low|high from risk:classify; unset = run risk.py here; other = high
+#   CANARY_BASE_SHA         stable baseline commit; default: the last promoted commit, else HEAD
+#   CANARY_ORDERS           orders to seed for today, default 24
+#
+# Baseline: ci.commit_sha of verdict.json from the latest successful `canary` job on the default
+# branch (job-token artifacts API; that job's decision was PROMOTE, or PROMOTE_PENDING_APPROVAL that
+# a person approved, since its pipeline succeeded). Without one (first run, outside CI, API error,
+# commit not in the clone) stable is this commit, as before #28: the canary then proves the
+# mechanism only, and a real regression in both tracks reads as HOLD (stable unhealthy).
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/../lib/common.sh"
@@ -38,6 +49,15 @@ VERDICT_JSON="$ROOT/verdict.json"
 VERDICT_ENV="$ROOT/verdict.env"
 KEY_FILE="$ROOT/tests/e2e/.out/userb2.key"
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# last_promoted: the commit of the latest successful default-branch canary, or nothing.
+last_promoted() {
+  [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ] || return 0
+  curl -fsS --max-time 20 -H "JOB-TOKEN: $CI_JOB_TOKEN" \
+    "$CI_API_V4_URL/projects/$CI_PROJECT_ID/jobs/artifacts/${CI_DEFAULT_BRANCH:-main}/raw/verdict.json?job=canary" \
+    2>/dev/null | jq -r 'select(.decision == "PROMOTE" or .decision == "PROMOTE_PENDING_APPROVAL")
+      | .ci.commit_sha // empty' 2>/dev/null || true
+}
 
 for c in docker k3d kubectl helm node jq curl python3 openssl git; do need "$c" "Install $c"; done
 
@@ -69,7 +89,23 @@ for _ in $(seq 1 90); do kc -n kube-system get deploy/traefik >/dev/null 2>&1 &&
 kc -n kube-system rollout status deploy/traefik --timeout=180s
 
 say "2/7 images"
-for c in gateway woo-mcp everything; do
+head_sha=$(git -C "$ROOT" rev-parse HEAD)
+base_sha=${CANARY_BASE_SHA:-$(last_promoted)} base_src=${CANARY_BASE_SHA:+CANARY_BASE_SHA}
+base_src=${base_src:-last-promoted}
+if ! printf '%s' "$base_sha" | grep -Eq '^[0-9a-f]{7,40}$' ||
+  ! base_sha=$(git -C "$ROOT" rev-parse --verify -q "$base_sha^{commit}"); then
+  [ -z "$base_sha" ] || warn "baseline ${base_sha:0:12} is not a commit in this clone"
+  base_sha=$head_sha base_src=head
+fi
+base_dir=$ROOT
+if [ "$base_sha" != "$head_sha" ]; then
+  base_dir=$(mktemp -d)/base
+  git -C "$ROOT" worktree add -q --detach "$base_dir" "$base_sha"
+fi
+say "stable gateway = ${base_sha:0:8} ($base_src), canary = ${head_sha:0:8}"
+docker build -q -f "$base_dir/apps/gateway/Dockerfile" -t urumi-gateway:ci "$base_dir" >/dev/null
+[ "$base_dir" = "$ROOT" ] || git -C "$ROOT" worktree remove --force "$base_dir"
+for c in woo-mcp everything; do
   docker build -q -f "$ROOT/apps/$c/Dockerfile" -t "urumi-$c:ci" "$ROOT" >/dev/null
 done
 "$ROOT/scripts/canary/k3d-import.sh" "$CLUSTER_NAME" urumi-gateway:ci urumi-woo-mcp:ci urumi-everything:ci
@@ -89,6 +125,7 @@ helm --kube-context "$KUBE_CONTEXT" upgrade --install urumi "$CHART" -n "$NAMESP
 }
 E2E_SKIP_GITLAB=1 "$ROOT/tests/e2e/run.sh" seed ||
   die "seed failed: $(cat "$ROOT/tests/e2e/.out/seed.log" 2>/dev/null | tail -20)"
+"$ROOT/scripts/canary/seed-orders.sh" "${CANARY_ORDERS:-24}" || die "seeding today's orders failed"
 
 say "5/7 canary $CANARY_TAG"
 fault=()
@@ -130,7 +167,8 @@ jq -f "$ROOT/scripts/canary/record.jq" --arg decision "$decision" --arg action "
   --arg weight "${CANARY_WEIGHT:-20}" --arg live "$canary_live_at" --arg verdict_at "$verdict_at" \
   --arg applied "$applied_at" --arg pipeline_id "${CI_PIPELINE_ID:-}" \
   --arg pipeline_url "${CI_PIPELINE_URL:-}" --arg job_name "${CI_JOB_NAME:-}" \
-  --arg job_url "${CI_JOB_URL:-}" --arg sha "$(git -C "$ROOT" rev-parse HEAD)" \
+  --arg job_url "${CI_JOB_URL:-}" --arg sha "$head_sha" \
+  --arg base_sha "$base_sha" --arg base_src "$base_src" \
   --arg ref "${CI_COMMIT_REF_NAME:-}" "$VERDICT_JSON" >"$VERDICT_JSON.tmp"
 mv "$VERDICT_JSON.tmp" "$VERDICT_JSON"
 
