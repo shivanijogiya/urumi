@@ -70,7 +70,7 @@ class Api:
             path += "?" + urllib.parse.urlencode(query)
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(self.base + path, data=data, method=method)
-        req.add_header("PRIVATE-TOKEN", self._token)
+        req.add_unredirected_header("PRIVATE-TOKEN", self._token)  # never sent on to a redirect
         req.add_header("Accept", "application/json")
         if data is not None:
             req.add_header("Content-Type", "application/json")
