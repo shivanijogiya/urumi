@@ -90,11 +90,11 @@ kc -n kube-system rollout status deploy/traefik --timeout=180s
 
 say "2/7 images"
 head_sha=$(git -C "$ROOT" rev-parse HEAD)
-base_sha=${CANARY_BASE_SHA:-$(last_promoted)} base_src=${CANARY_BASE_SHA:+CANARY_BASE_SHA}
+wanted=${CANARY_BASE_SHA:-$(last_promoted)} base_src=${CANARY_BASE_SHA:+CANARY_BASE_SHA}
 base_src=${base_src:-last-promoted}
-if ! printf '%s' "$base_sha" | grep -Eq '^[0-9a-f]{7,40}$' ||
-  ! base_sha=$(git -C "$ROOT" rev-parse --verify -q "$base_sha^{commit}"); then
-  [ -z "$base_sha" ] || warn "baseline ${base_sha:0:12} is not a commit in this clone"
+if ! printf '%s' "$wanted" | grep -Eq '^[0-9a-f]{7,40}$' ||
+  ! base_sha=$(git -C "$ROOT" rev-parse --verify -q "$wanted^{commit}"); then
+  [ -z "$wanted" ] || warn "baseline '${wanted:0:40}' is not a commit in this clone"
   base_sha=$head_sha base_src=head
 fi
 base_dir=$ROOT

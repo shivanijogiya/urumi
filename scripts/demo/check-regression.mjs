@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global Headers, console, process */
 // Demo regression check (#28; scripts/demo/README.md). Not part of `npm test`.
 //
 // Sends one realistic `woo__list_orders` page through the gateway's real result path and checks
@@ -130,7 +131,11 @@ async function main() {
 
     const secret = randomBytes(24).toString('hex');
     woo = gw.createApp(
-      { port: 0, sharedSecret: secret, woo: { url: 'http://woo.invalid', user: 'x', appPassword: 'x' } },
+      {
+        port: 0,
+        sharedSecret: secret,
+        woo: { url: 'http://woo.invalid', user: 'x', appPassword: 'x' },
+      },
       { client: stubWoo(), log: () => {} },
     );
     await new Promise((r) => woo.listen(0, '127.0.0.1', r));
@@ -163,7 +168,12 @@ async function main() {
 
     let result;
     try {
-      result = await callTool('demo-user', 'woo__list_orders', { date: 'today' }, { source: 'mcp' });
+      result = await callTool(
+        'demo-user',
+        'woo__list_orders',
+        { date: 'today' },
+        { source: 'mcp' },
+      );
     } catch (err) {
       console.log(`FAIL woo__list_orders: ${err.code ?? err.name}: ${err.message}`);
       console.log(`     a normal page of ${PER_PAGE} of today's orders did not reach the client`);
@@ -173,7 +183,9 @@ async function main() {
     const page = JSON.parse(text);
     const bytes = gw.jsonBytes(result);
     if (result.isError || page.orders?.length !== PER_PAGE || page.total !== ORDERS) {
-      console.log(`FAIL woo__list_orders: unexpected result (isError=${!!result.isError}, ${bytes} bytes)`);
+      console.log(
+        `FAIL woo__list_orders: unexpected result (isError=${!!result.isError}, ${bytes} bytes)`,
+      );
       return 1;
     }
     const items = page.orders.reduce((n, o) => n + o.line_items.length, 0);
