@@ -164,6 +164,7 @@ The postmortem flow on autoheal MR !34 (session 9840424) found `autoheal:report`
 
 **Trade-off.** Anyone with Developer access can edit an MR description, so they could forge a
 PROMOTE block. Four things limit this:
+
 1. The verdict must name the MR's current head pipeline.
 2. That pipeline must have reached `autoheal:report`, and its `canary` must not be failing,
    according to GitLab's own job list.
