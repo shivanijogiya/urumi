@@ -1,3 +1,4 @@
+// Risk-gate drill: comment-only change to an auth file (high-risk path). Not for merge.
 // In-memory login throttle. Two instances guard every password check:
 //   - per email: MAX_FAILURES attempts per WINDOW_MS, cleared by a successful login;
 //   - per client IP: IP_MAX_FAILURES failures per WINDOW_MS, so one client cannot spray many
