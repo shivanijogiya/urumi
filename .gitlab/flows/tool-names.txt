@@ -1,0 +1,14 @@
+get_pipeline_failing_jobs
+get_logs_from_job
+create_issue
+create_work_item
+update_issue
+create_issue_note
+get_merge_request
+list_merge_request_diffs
+create_merge_request_note
+update_merge_request
+submit_merge_request_risk_classification
+get_repository_file
+get_project
+issue_search

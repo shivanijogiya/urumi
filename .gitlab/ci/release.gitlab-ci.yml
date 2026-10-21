@@ -190,7 +190,7 @@ release:preflight:
   rules:
     - if: $CI_COMMIT_TAG
 
-# Policy + helper tests for this file and the scripts it runs.
+# Policy + helper tests for this file and the scripts it runs, plus the Duo flow policy test (#24).
 release:config-tests:
   stage: lint
   image:
@@ -199,8 +199,9 @@ release:config-tests:
   cache: []
   interruptible: true
   before_script:
-    - apk add --no-cache bash jq
+    - apk add --no-cache bash jq python3
   script:
     - bash .gitlab/ci/tests/chart-version.test.sh
     - bash .gitlab/ci/tests/chart-package.test.sh
     - bash .gitlab/ci/tests/release-config.test.sh
+    - bash .gitlab/flows/tests/flows.test.sh

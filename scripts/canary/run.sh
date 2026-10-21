@@ -103,7 +103,7 @@ build_image() {
       need k3d "Install k3d"
       say "Building $repo:$tag and importing it into k3d cluster $CLUSTER_NAME"
       docker build -q -f "$ROOT/apps/gateway/Dockerfile" -t "$repo:$tag" "$ROOT" >/dev/null
-      k3d image import "$repo:$tag" -c "$CLUSTER_NAME" >/dev/null
+      "$ROOT/scripts/canary/k3d-import.sh" "$CLUSTER_NAME" "$repo:$tag" >/dev/null
       ;;
     none) say "Using existing image $repo:$tag" ;;
     *) die "IMAGE_MODE must be push, import or none" ;;

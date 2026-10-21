@@ -67,4 +67,6 @@ bash .gitlab/ci/tests/chart-package.test.sh    # packaging helper against charts
 bash .gitlab/ci/tests/release-config.test.sh   # YAML parse (via helm) + policy for both CI files (needs helm, jq)
 ```
 
-CI runs all three in `release:config-tests`.
+CI runs all three in `release:config-tests`, plus `bash .gitlab/flows/tests/flows.test.sh` (Duo
+flow YAML policy and risk-rule parity, #24; needs helm, jq, python3). The canary, risk gate and
+flows are described in `docs/HACKATHON.md`.
