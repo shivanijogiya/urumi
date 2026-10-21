@@ -1,7 +1,8 @@
 # ADR 004 — Duo Agent Platform flows: incident on rollback, risk gate before promote
 
 Status: proposed (needs Aadi: flows are registered in the GitLab UI, and CI semantics change) ·
-Issue #24 · Requirement H3 · Amends ADR 003 (a ROLLBACK now fails the canary job)
+Issue #24 · Requirement H3 · Amends ADR 003 (a ROLLBACK now fails the canary job) ·
+Amended by ADR 005 (#28: healer step, postmortem flow)
 
 ## Context
 

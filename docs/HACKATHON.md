@@ -1,7 +1,7 @@
 # Hackathon story: from commit to canary verdict, risk gate and incident
 
-Issues #22 (H1), #23 (H2), #24 (H3). ADRs: [003 canary](adr/003-canary.md),
-[004 Duo flows](adr/004-duo-flows.md).
+Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing). ADRs: [003 canary](adr/003-canary.md),
+[004 Duo flows](adr/004-duo-flows.md), [005 self-healing](adr/005-self-healing.md).
 
 ## The story in one pipeline
 
@@ -26,6 +26,42 @@ Issues #22 (H1), #23 (H2), #24 (H3). ADRs: [003 canary](adr/003-canary.md),
 7. **Incident.** A ROLLBACK fails the job (`RELEASE REJECTED: canary rolled back`) and so fails
    the pipeline. The Duo **incident** flow reads the verdict from the job log and opens an
    **incident** and a **`priority::high` regression issue**.
+8. **Heal.** In the same session, the **healer** finds the suspect gateway commit, explains the
+   hunk against the verdict, and opens MR **`Autoheal: <root cause> (incident #N)`** (label
+   `autoheal`) with the smallest fix (a targeted hunk revert). If it is unsure, or the suspect
+   touched CI, charts or secrets, it comments "needs human" instead.
+9. **Verify, approve, postmortem.** The autoheal MR's `canary` runs **automatically**: stable is
+   the last promoted commit and the canary is the fix. A person approves. The Duo **postmortem**
+   flow reads the verdict from `autoheal:report`. On PROMOTE it posts a blameless postmortem on
+   the incident, labels it `status::mitigated`, and notes "verified by canary, ready to merge".
+   A person merges.
+
+The canary compares this commit with the **last promoted** one (stable is built from it) and
+probes a store with **24 of today's orders**. Before #28 both tracks ran the same commit on an
+empty store.
+
+### The self-healing loop
+
+```mermaid
+flowchart LR
+  H1([person merges MR]) --> M[main pipeline]
+  M --> C{canary 20%<br/>vs last promoted}
+  C -->|PROMOTE| P[promoted]
+  C -->|ROLLBACK| F[pipeline failed]
+  F -->|Pipeline failed| I[[incident flow]]
+  I --> INC[incident + regression issue]
+  I -->|healable| HE[healer]
+  HE -->|unsure / forbidden path| NH[note: needs human]
+  HE --> AM[autoheal MR<br/>label autoheal]
+  AM --> AC{canary, automatic<br/>autoheal/ rule}
+  AC --> AR[autoheal:report<br/>AUTOHEAL_VERDICT_JSON]
+  AC -->|ROLLBACK| AF[MR pipeline failed]
+  AR --> H2([person approves])
+  H2 -->|Merge request approved| PM[[postmortem flow]]
+  PM -->|PROMOTE| PMN[postmortem on incident<br/>status::mitigated<br/>MR: ready to merge]
+  PM -->|not PROMOTE| NV[note: not verified]
+  PMN --> H3([person merges]) --> M
+```
 
 ```mermaid
 flowchart LR
@@ -51,15 +87,19 @@ flowchart LR
 
 ## What lives where
 
-| Piece                                   | File                                                     |
-| --------------------------------------- | -------------------------------------------------------- |
-| Canary job, drill, risk + approval jobs | `.gitlab/ci/canary.gitlab-ci.yml`                        |
-| Canary run (cluster, deploy, verdict)   | `scripts/canary/ci.sh`, `run.sh`, `verdict.py`           |
-| Verdict record + log line               | `scripts/canary/record.jq` → `CANARY_VERDICT_JSON: {..}` |
-| Risk classifier                         | `scripts/canary/risk.py` (`--list-globs` prints rules)   |
-| Approval record                         | `scripts/canary/approval.py` → `approval.json`           |
-| Flows                                   | `.gitlab/flows/incident.yaml`, `risk-gate.yaml`          |
-| Flow policy + rule parity test          | `.gitlab/flows/tests/flows.test.sh`                      |
+| Piece                                   | File                                                               |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| Canary job, drill, risk + approval jobs | `.gitlab/ci/canary.gitlab-ci.yml`                                  |
+| Canary run (cluster, deploy, verdict)   | `scripts/canary/ci.sh`, `run.sh`, `verdict.py`                     |
+| Verdict record + log line               | `scripts/canary/record.jq` → `CANARY_VERDICT_JSON: {..}`           |
+| Risk classifier                         | `scripts/canary/risk.py` (`--list-globs` prints rules)             |
+| Approval record                         | `scripts/canary/approval.py` → `approval.json`                     |
+| Flows                                   | `.gitlab/flows/incident.yaml`, `risk-gate.yaml`, `postmortem.yaml` |
+| Flow policy + rule parity test          | `.gitlab/flows/tests/flows.test.sh`                                |
+| Canary baseline + seeded orders         | `scripts/canary/ci.sh`, `seed-orders.sh`                           |
+| Autoheal verdict for the postmortem     | `autoheal:report` → `scripts/canary/autoheal_report.py`            |
+| Autoheal CI policy test                 | `.gitlab/ci/tests/autoheal-ci.test.sh`                             |
+| Demo regression + offline check         | `scripts/demo/regression.sh`, `check-regression.mjs`, `README.md`  |
 
 `release:human-approval` exists on main only when the push touches a high-risk glob (the same
 globs as `risk.py`, checked by `flows.test.sh`), so low-risk main pipelines stay green. If it
@@ -80,11 +120,16 @@ regression issue`.
    - Configuration: select **Flow**, then paste all of `.gitlab/flows/incident.yaml`.
    - **Create flow**.
 2. **Create the risk-gate flow** the same way. Display name `Release risk gate`, Visibility
-   **Private**, paste `.gitlab/flows/risk-gate.yaml`, **Create flow**.
+   **Private**, paste `.gitlab/flows/risk-gate.yaml`, **Create flow**. Create the **postmortem
+   flow** the same way too: display name `Autoheal postmortem`, description `Approved autoheal MR
+-> verify canary -> postmortem`, paste `.gitlab/flows/postmortem.yaml`. **Re-paste
+   `incident.yaml`** into the existing Canary incident flow, because it gained the healer step.
 3. **Enable each flow in the project, with its trigger.** **AI > Flows > Managed** tab, then
    select the flow, then **Enable** (upper right).
    - Project: this project.
    - **Canary incident**: Add triggers, event type **Pipeline events**, action **Failed**.
+   - **Autoheal postmortem**: Add triggers, event type **Merge request**, action **Approved**
+     (GitLab 19.1+).
    - **Release risk gate**: Add triggers, event type **Merge request**, action **Created**. Add
      a second trigger with event type **Merge request ready** (if your version lists "Marked
      ready" as an action of Merge request, use that instead).
@@ -96,7 +141,8 @@ regression issue`.
 4. **Project settings for the gate.** **Settings > Merge requests > Merge checks > Pipelines
    must succeed**, so a blocked high-risk MR pipeline can't be merged. Optional: create the
    labels `priority::high`, `type::regression`, `app::gateway`, `incident`, `canary::rollback`,
-   `risk::high`, `risk::low` and `gate::infra` in **Manage > Labels** to pick colours. GitLab
+   `risk::high`, `risk::low`, `gate::infra`, `autoheal` and `status::mitigated` in
+   **Manage > Labels** to pick colours. GitLab
    creates missing labels on use anyway.
 
 ## Demo script
@@ -131,6 +177,25 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
    `type::regression` and `app::gateway`, which links the incident and gives a first
    investigation step.
 4. Re-running the flow for the same pipeline creates nothing new (it searches first).
+   A drill never reaches the healer (`force_bad` true → `done`).
+
+**(c) Self-healing release.** This is the full loop with a realistic regression.
+[scripts/demo/README.md](../scripts/demo/README.md) has the commands.
+
+1. `bash scripts/demo/regression.sh` creates branch `demo/faster-tool-results` with one commit:
+   a 4 KB cap on pages of paginated tools. Push it, open an MR, and merge it. Its unit tests
+   pass.
+2. main's canary seeds today's orders and decides **ROLLBACK** with
+   `canary woo__list_orders success 0.0%`. The pipeline fails, and the incident and regression
+   issue appear.
+3. The healer opens **`Autoheal: ... (incident #N)`** from `autoheal/<pipeline id>`, which
+   reverts the hunk in `apps/gateway/src/core/{limits,call-tool}.ts`. Notes on both issues link
+   it.
+4. The MR's `canary` runs with no click and decides **PROMOTE**. `autoheal:report` (failing on
+   purpose) carries `AUTOHEAL_VERDICT_JSON`.
+5. Approve the MR. The **Autoheal postmortem** session posts the postmortem on the incident,
+   adds `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR.
+6. Merge the MR. main's canary promotes it.
 
 ## Honest limits
 
@@ -148,6 +213,16 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
 - The flow's Human Input approval is recorded on the MR, but it can't run the CI job. The
   enforcing gate is `release:human-approval`. Anyone allowed to run jobs on that ref can run it.
   Use a protected environment with approval rules (Premium) for strict separation of duties.
+- Self-healing (#28) is bounded on purpose. The healer only restores lines from before one
+  suspect commit, in at most 3 files, never in CI, charts, `scripts/canary/**` or secrets.
+  Anything else gets "needs human". It can be wrong: the autoheal canary and the human approval
+  are the checks, and nothing merges without a person.
+- `autoheal:report` always fails (allowed to fail) on autoheal MRs. In the tools we use, a flow
+  can only find failed jobs, so that is how the postmortem reads a successful canary's verdict
+  (ADR 005). `GitLabApiGet` might do this directly, but its tool name is unverified offline.
+- The canary baseline comes from the job-token artifacts API (the latest successful default-branch
+  `canary`). Without it, stable is this commit, as before, and a real regression reads as HOLD.
+  Today's orders are dated at seeding, so a run that crosses midnight IST sees fewer of them.
 - The flows have been checked by `flows.test.sh` (schema rules, tool names, routes) but not
   executed on GitLab from this repo. Agent behaviour (exact answers, tool parameters such as
   incident type or add-labels) is resolved at run time, and the prompts include fallbacks.
