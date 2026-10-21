@@ -76,6 +76,11 @@ for f in "${FLOW_FILES[@]}"; do
   # (UI: "max_cycles is a disallowed additional property"), so allow-list what GitLab accepted.
   check "$n: components use only keys GitLab's custom-flow schema accepts" "$j" \
     '[.components[] | keys[] | select(IN("name","type","prompt_id","prompt_version","inputs","toolset","ui_log_events","tool_name","sends_response_to","message_template") | not)] == []'
+  # GitLab rejects prompts with HTML comments, markdown link comments or hidden unicode
+  # (UI: "SecurityException: ... contains dangerous content"; #32).
+  check "$n: prompts have no HTML/markdown comments or hidden unicode" "$j" \
+    '[.prompts[].prompt_template[] | strings | select(test("<!--|-->|\\[//\\]:|\\[comment\\]:")
+       or (explode | any((. >= 8203 and . <= 8207) or (. >= 8288 and . <= 8292) or . == 65279)))] == []'
   check "$n: only known top-level keys" "$j" \
     '(keys - ["version","environment","components","routers","flow","prompts"]) == []'
   check "$n: components, routers, flow and prompts present" "$j" \
@@ -215,7 +220,7 @@ if [ -f "$P" ]; then
   # #32: flows cannot read job logs here; autoheal:report writes the verdict into the MR description.
   check "postmortem: reads the verdict block from the MR description, pinned to head_pipeline" "$P" \
     '.prompts[] | select(.prompt_id == "postmortem_write") | .prompt_template.system
-     | contains("<!-- autoheal-verdict:start -->") and contains("<!-- autoheal-verdict:end -->")
+     | contains("autoheal-verdict:end")
        and contains("autoheal-verdict:start") and contains("head_pipeline") and contains("ci.pipeline_id")
        and contains("get_merge_request") and contains("exactly \"autoheal:report\"")
        and contains("exactly \"canary\"")'

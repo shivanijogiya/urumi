@@ -11,12 +11,15 @@ and:
          AUTOHEAL_VERDICT_JSON: {...}
      (decision NONE when the canary left no verdict.json, a setup failure);
   2. writes the same line into the MR description, between
-         <!-- autoheal-verdict:start -->  and  <!-- autoheal-verdict:end -->
-     replacing an existing block (reruns are idempotent) or appending one;
+         `autoheal-verdict:start`  and  `autoheal-verdict:end`
+     (visible marker lines: Duo strips HTML comments from tool output, so hidden markers never
+     reach the flow; #32), replacing an existing block, or a legacy one marked with HTML
+     comments (reruns are idempotent), or appending one;
   3. exits 1 on purpose, so get_pipeline_failing_jobs lists the job (the postmortem's proof that
      the pipeline reached the report) and allow_failure keeps the pipeline green.
 
-The JSON cannot close the HTML comment or start a mention: "<", ">" and "@" are \\u-escaped. The
+The JSON cannot contain a marker or start a mention: "<", ">", "@", "`" and the "-" of
+"autoheal-verdict" are \\u-escaped. The
 block is capped at MAX_BLOCK_CHARS ("timeline" dropped first, then reasons beyond 5).
 
 Env for step 2: DUO_DISPATCH_TOKEN (sent as PRIVATE-TOKEN, never printed), CI_API_V4_URL,
@@ -37,8 +40,11 @@ import urllib.error
 import urllib.request
 
 MARKER = "AUTOHEAL_VERDICT_JSON: "
-BLOCK_START = "<!-- autoheal-verdict:start -->"
-BLOCK_END = "<!-- autoheal-verdict:end -->"
+BLOCK_START = "`autoheal-verdict:start`"
+BLOCK_END = "`autoheal-verdict:end`"
+# Earlier releases wrote the markers as HTML comments; with_block replaces those blocks too.
+LEGACY_START = "<!-- autoheal-verdict:start -->"
+LEGACY_END = "<!-- autoheal-verdict:end -->"
 BLOCK_HEADING = "### Canary verdict (written by CI job autoheal:report — do not edit)"
 MAX_BLOCK_CHARS = 4000
 MAX_REASONS = 5
@@ -78,9 +84,11 @@ def summary(path: str) -> dict:
 
 
 def compact(s: dict) -> str:
-    """One-line JSON that cannot end the HTML comment, contain a marker or mention anyone."""
+    """One-line JSON that cannot contain a marker, close an HTML comment or mention anyone."""
     text = json.dumps(s, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
-    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("@", "\\u0040")
+    for ch, esc in (("<", "\\u003c"), (">", "\\u003e"), ("@", "\\u0040"), ("`", "\\u0060")):
+        text = text.replace(ch, esc)
+    return text.replace("autoheal-verdict", "autoheal\\u002dverdict")
 
 
 def _block(s: dict) -> str:
@@ -114,7 +122,7 @@ def with_block(description: str | None, block: str) -> str:
     """The description with exactly one verdict block: in place of the first existing one (any
     others, and an unterminated start marker with everything after it, are removed), or appended
     after a blank line."""
-    desc = description or ""
+    desc = (description or "").replace(LEGACY_START, BLOCK_START).replace(LEGACY_END, BLOCK_END)
     first = desc.find(BLOCK_START)
     if first == -1:
         return desc.rstrip("\n") + "\n\n" + block if desc.strip() else block

@@ -146,7 +146,7 @@ The postmortem flow on autoheal MR !34 (session 9840424) found `autoheal:report`
 
 - `scripts/canary/autoheal_report.py` still prints the `AUTOHEAL_VERDICT_JSON: {...}` line and
   exits 1. It now also writes that line into the **MR description**, between
-  `<!-- autoheal-verdict:start -->` and `<!-- autoheal-verdict:end -->`. It reads the description
+  the visible lines `` `autoheal-verdict:start` `` and `` `autoheal-verdict:end` `` (Duo strips HTML comments from tool output, so hidden markers never reached the flow). It reads the description
   and then replaces the block, so reruns stay idempotent and any extra blocks are removed. It
   uses the `DUO_DISPATCH_TOKEN` CI/CD variable (ADR 007), sent only as `PRIVATE-TOKEN` with a
   10 s timeout. The JSON escapes `<`, `>` and `@`, so it cannot close the comment, fake a marker
