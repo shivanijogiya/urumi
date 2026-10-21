@@ -9,12 +9,6 @@ export const MAX_INPUT_SCHEMA_BYTES = 16 * 1024;
 /** tools/call: a JSON-serialised result over this (UTF-8 bytes) fails with UPSTREAM_ERROR. */
 export const MAX_RESULT_BYTES = 256 * 1024;
 /**
- * tools/call: a page of a paginated tool (its inputSchema has `per_page`) over this (UTF-8 bytes)
- * fails like an oversized result. Big pages are slow to ship to MCP clients and to the chat model,
- * and the caller can always ask for a smaller `per_page`.
- */
-export const MAX_PAGE_RESULT_BYTES = 4 * 1024;
-/**
  * tools/call: raw HTTP response body bytes read before the upstream is cut off (same error). The
  * body wraps the result in a JSON-RPC envelope (and SSE framing), hence the slack; the check on
  * the parsed result above stays the exact one.
