@@ -42,7 +42,7 @@ except for the postmortem, which is a deliberate mention by a person.
 9. **Verify, approve, postmortem.** The autoheal MR's `canary` runs **automatically**: stable is
    the last promoted commit and the canary is the fix. A person approves, then mentions
    `@ai-canary-postmortem-gitlab-ai-hackathon` on the MR. The Duo **postmortem** flow reads the
-   verdict from `autoheal:report`. On PROMOTE it posts a blameless postmortem on
+   verdict that `autoheal:report` writes into the MR description. On PROMOTE it posts a blameless postmortem on
    the incident, labels it `status::mitigated`, and notes "verified by canary, ready to merge".
    A person merges.
 
@@ -65,7 +65,7 @@ flowchart LR
   HE -->|unsure / forbidden path| NH[note: needs human]
   HE --> AM[autoheal MR<br/>label autoheal]
   AM --> AC{canary, automatic<br/>autoheal/ rule}
-  AC --> AR[autoheal:report<br/>AUTOHEAL_VERDICT_JSON]
+  AC --> AR[autoheal:report<br/>verdict block in MR description]
   AC -->|ROLLBACK| AF[MR pipeline failed]
   AR --> H2([person approves,<br/>mentions postmortem bot])
   H2 -->|Mention| PM[[postmortem flow]]
@@ -110,7 +110,7 @@ flowchart LR
 | Dispatch CI policy test                 | `.gitlab/ci/tests/duo-dispatch.test.sh`                            |
 | Flow policy + rule parity test          | `.gitlab/flows/tests/flows.test.sh`                                |
 | Canary baseline + seeded orders         | `scripts/canary/ci.sh`, `seed-orders.sh`                           |
-| Autoheal verdict for the postmortem     | `autoheal:report` → `scripts/canary/autoheal_report.py`            |
+| Autoheal verdict for the postmortem     | `autoheal:report` → `autoheal_report.py` → MR description block    |
 | Autoheal CI policy test                 | `.gitlab/ci/tests/autoheal-ci.test.sh`                             |
 | Demo regression + offline check         | `scripts/demo/regression.sh`, `check-regression.mjs`, `README.md`  |
 
@@ -189,7 +189,7 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
    stable-vs-canary table, the reasons, links, and the record block after
    `CANARY_VERDICT_JSON:`. It is assigned to `ai-canary-incident-gitlab-ai-hackathon`.
 4. The **Canary incident** session starts on that assignment. It posts `## Incident triage
-(Duo)` on the issue (verdict, what the job log confirms, the commits since the stable
+(Duo)` on the issue (verdict, the job's result from the CI canary record, the commits since the stable
    baseline, impact) and opens `Regression: gateway canary rejected at <sha> on main`
    (`priority::high`, `type::regression`, `app::gateway`), and the label becomes
    `status::triaged`.
@@ -213,7 +213,7 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
    reverts the hunk in `apps/gateway/src/core/{limits,call-tool}.ts`. Notes on both issues link
    it.
 4. The MR's `canary` runs with no click and decides **PROMOTE**. `autoheal:report` (failing on
-   purpose) carries `AUTOHEAL_VERDICT_JSON`.
+   purpose) writes `AUTOHEAL_VERDICT_JSON` into the MR description, in the "Canary verdict" block.
 5. Approve the MR, then comment `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>` on it.
    The **Autoheal postmortem** session posts the postmortem on the incident, adds
    `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR.
@@ -245,9 +245,12 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
   suspect commit, in at most 3 files, never in CI, charts, `scripts/canary/**` or secrets.
   Anything else gets "needs human". It can be wrong: the autoheal canary and the human approval
   are the checks, and nothing merges without a person.
-- `autoheal:report` always fails (allowed to fail) on autoheal MRs. In the tools we use, a flow
-  can only find failed jobs, so that is how the postmortem reads a successful canary's verdict
-  (ADR 005). `GitLabApiGet` might do this directly, but its tool name is unverified offline.
+- `autoheal:report` always fails (allowed to fail) on autoheal MRs. Duo flows cannot read job
+  logs in this project (#32), so the job writes the verdict into the MR description, and its
+  failing status shows the postmortem that the pipeline reached the report (ADR 005, amendment).
+  Anyone with Developer access could edit that block. The flow accepts it only for the MR's head
+  pipeline, with `canary` not failing, and a person still merges. `GitLabApiGet` might read the
+  verdict directly, but its tool name is unverified offline.
 - The canary baseline comes from the job-token artifacts API (the latest successful default-branch
   `canary`). Without it, stable is this commit, as before, and a real regression reads as HOLD.
   Today's orders are dated at seeding, so a run that crosses midnight IST sees fewer of them.

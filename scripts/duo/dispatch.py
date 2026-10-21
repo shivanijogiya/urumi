@@ -11,7 +11,9 @@ reviewer of the flow's service account. A flow then gets `context:goal` = the ii
   dispatch.py incident --record verdict.json
       After a canary ROLLBACK: opens the incident issue "Incident: canary rolled back <short sha>
       (pipeline <id>)" with the canary record as a fenced JSON block after the line
-      `CANARY_VERDICT_JSON:`, then assigns the incident account. If an open issue for the same
+      `CANARY_VERDICT_JSON:`, then assigns the incident account. The issue is the flow's evidence:
+      flows cannot read job logs (#32), so it also states what the canary job did (action,
+      samples, job URL). If an open issue for the same
       pipeline exists, it only assigns that one. No record or not a ROLLBACK: nothing to do.
       Job duo:incident, default branch.
 
@@ -159,7 +161,7 @@ def incident_title(record: dict, pipeline_id: int) -> str:
 
 def incident_description(record: dict, pipeline_id: int, project_url: str) -> str:
     ci, tl, base = _obj(record, "ci"), _obj(record, "timeline"), _obj(record, "baseline")
-    st, ca = _obj(record, "stable"), _obj(record, "canary")
+    st, ca, sm = _obj(record, "stable"), _obj(record, "canary"), _obj(record, "samples")
     sha = _text(ci.get("commit_sha") or "unknown", 40)
     lines = []
     if record.get("force_bad") is True:
@@ -175,6 +177,14 @@ def incident_description(record: dict, pipeline_id: int, project_url: str) -> st
         f"/mcp requests on the app host went to the canary from {_text(tl.get('canary_live_at'))} "
         f"to {_text(tl.get('applied_at'))}; the stable gateway was not changed. This issue is "
         "assigned to the Duo incident flow, which investigates and comments here.",
+        "",
+        # The flow cannot read job logs (#32): this line stands in for the canary job's result.
+        f"**CI canary record** (job {_text(ci.get('job_name'))}, "
+        f"{_text(ci['job_url']) if ci.get('job_url') else 'no job URL'}, pipeline {pipeline_id}): "
+        f"verdict {_text(record.get('verdict'))}, decision {_text(record.get('decision'))}, action "
+        f"{_text(record.get('action'))}; samples {_num(sm.get('total'))} (stable {_num(sm.get('stable'))}, "
+        f"canary {_num(sm.get('canary'))}, unknown {_num(sm.get('unknown'))}, unattributed errors "
+        f"{_num(sm.get('unattributed_errors'))}).",
         "",
         "| Metric | Stable | Canary |",
         "| --- | --- | --- |",

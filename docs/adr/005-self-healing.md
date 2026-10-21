@@ -3,7 +3,8 @@
 Status: proposed (needs Aadi: new flow to register, CI semantics change for autoheal MRs and for
 the canary baseline) · Issue #28 · Scope G4 option B · Amends ADR 003 (stable baseline, seeded
 orders) and ADR 004 (incident flow gains a healer step) · Amended by ADR 007 (#27: the postmortem
-starts on a mention of its account, not on MR approval)
+starts on a mention of its account, not on MR approval) and by #32 (the verdict is read from the MR
+description, not the job log; see the amendment at the end)
 
 ## Context
 
@@ -135,3 +136,41 @@ merges. Three facts shaped the design:
 - Not verified on GitLab from this repo: flow execution, the exact tool parameters,
   `get_pipeline_failing_jobs` listing allow_failure jobs, and the job-token artifacts lookup.
   See docs/HACKATHON.md, Honest limits.
+
+## Amendment (#32): the verdict is written into the MR description
+
+Live runs (21 Oct 2026) showed that Duo custom flows **cannot read CI job logs** in this project.
+The postmortem flow on autoheal MR !34 (session 9840424) found `autoheal:report` through
+`get_pipeline_failing_jobs`, but `get_logs_from_job` failed. The incident flow on drill incident
+#28 reported no log-reading tool. So "the flow reads the verdict from the job log" does not work.
+
+- `scripts/canary/autoheal_report.py` still prints the `AUTOHEAL_VERDICT_JSON: {...}` line and
+  exits 1. It now also writes that line into the **MR description**, between
+  `<!-- autoheal-verdict:start -->` and `<!-- autoheal-verdict:end -->`. It reads the description
+  and then replaces the block, so reruns stay idempotent and any extra blocks are removed. It
+  uses the `DUO_DISPATCH_TOKEN` CI/CD variable (ADR 007), sent only as `PRIVATE-TOKEN` with a
+  10 s timeout. The JSON escapes `<`, `>` and `@`, so it cannot close the comment, fake a marker
+  or mention a flow account. The block is capped at 4000 characters. With no token or an API
+  error, the job prints one line and the description stays unchanged.
+- The postmortem flow reads the block with `get_merge_request`. The verdict counts only when
+  `ci.pipeline_id` equals the MR's `head_pipeline.id`. `get_pipeline_failing_jobs` for that
+  pipeline must list `autoheal:report` and must not list `canary`. More than one block means
+  NOT VERIFIED. `get_logs_from_job` stays in the toolset only as a fallback for when the block is
+  missing. If that also fails, the result is NOT VERIFIED.
+- The incident flow treats the canary record in the incident issue as its primary evidence.
+  `dispatch.py` writes that record, and now also adds a "CI canary record" line with the job,
+  job URL, action and sample counts. Reading the job log is optional, and an unreadable log
+  never stops the triage.
+
+**Trade-off.** Anyone with Developer access can edit an MR description, so they could forge a
+PROMOTE block. Four things limit this:
+
+1. The verdict must name the MR's current head pipeline.
+2. That pipeline must have reached `autoheal:report`, and its `canary` must not be failing,
+   according to GitLab's own job list.
+3. On autoheal MRs, the `canary` job runs automatically and is not allow_failure, so a failing
+   fix fails the pipeline.
+4. The flow never merges; a person does.
+
+A forged block can at most produce a wrong postmortem note and a `status::mitigated` label on a
+pipeline whose canary passed.

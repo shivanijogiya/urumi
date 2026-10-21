@@ -7,7 +7,8 @@
 #     allow_failure canary
 #   - `canary:bad-release` never runs automatically for autoheal branches
 #   - `autoheal:report` exists only on autoheal MR pipelines, needs `canary` (with artifacts), runs
-#     even when the canary failed, is allow_failure and runs scripts/canary/autoheal_report.py
+#     even when the canary failed, is allow_failure and runs scripts/canary/autoheal_report.py,
+#     which writes the verdict into the MR description (#32); the job never echoes the token
 #   - the canary job keeps full git history (the stable baseline commit must be in the clone)
 #   - release:config-tests runs this test
 # Run: bash .gitlab/ci/tests/autoheal-ci.test.sh   (needs helm, jq)
@@ -75,11 +76,18 @@ check "autoheal:report: allow_failure (it exits 1 on purpose)" "$C" \
   '.["autoheal:report"].rules[0].allow_failure == true'
 check "autoheal:report: runs autoheal_report.py on verdict.json" "$C" \
   '.["autoheal:report"].script | join("\n") | contains("scripts/canary/autoheal_report.py")'
+# #32: the script reads DUO_DISPATCH_TOKEN from the environment; the job never echoes it, passes it
+# as an argument or turns on shell tracing.
+check "autoheal:report: still runs autoheal_report.py and never echoes or passes the token" "$C" \
+  '.["autoheal:report"] | ([.before_script, .script, .after_script] | map(. // []) | add | join("\n")) as $s
+   | ($s | contains("python3 scripts/canary/autoheal_report.py"))
+     and ($s | test("DUO_DISPATCH_TOKEN") | not) and ($s | test("set +-[a-z]*x") | not)
+     and (.variables // {} | has("DUO_DISPATCH_TOKEN") | not)'
 check "release:config-tests runs this test" "$R" \
   '.["release:config-tests"].script | join("\n") | contains(".gitlab/ci/tests/autoheal-ci.test.sh")'
 
 # The report line is what the postmortem flow parses (flows.test.sh checks the flow uses it).
-out="$(cd "$TMP" && python3 "$ROOT/scripts/canary/autoheal_report.py" --verdict missing.json 2>/dev/null)"
+out="$(cd "$TMP" && python3 "$ROOT/scripts/canary/autoheal_report.py" --verdict missing.json --no-mr-update 2>/dev/null)"
 code=$?
 if [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q '^AUTOHEAL_VERDICT_JSON: {"decision":"NONE"'; then
   ok "autoheal_report.py prints the marker line and exits 1"
