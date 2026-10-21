@@ -39,6 +39,7 @@ class State:
     def __init__(self):
         self.lock = threading.Lock()
         self.model_mode = "honest"  # honest | liar | loop | down | notfound
+        self.refuse_temperature = False  # newer models: 400 "temperature is deprecated"
         self.usage_in = 1000
         self.tool_errors: set[tuple[str, str]] = set()  # (pinned track, tool)
         self.answer_track: str | None = None  # answer with this track whatever the pin
@@ -168,6 +169,9 @@ def make_handler(state: State):
                 return self.send(500, {"type": "error", "error": {"type": "api_error"}})
             if state.model_mode == "notfound":
                 return self.send(404, {"type": "error", "error": {"type": "not_found_error"}})
+            if state.refuse_temperature and "temperature" in body:
+                err = {"type": "invalid_request_error", "message": "temperature is deprecated for this model."}
+                return self.send(400, {"type": "error", "error": err})
             content = shopper_turn(state, body)
             stop = "tool_use" if any(b["type"] == "tool_use" for b in content) else "end_turn"
             self.send(
@@ -393,6 +397,24 @@ class ShoppersTest(unittest.TestCase):
         self.assertEqual((t["valid"], t["completed"]), (1, 0))
         self.assertEqual(t["blockers"], ["I gave up: I could not finish within 3 steps."])
         self.assertEqual(self.state.model_requests, 3)
+
+    def test_a_model_that_refuses_temperature_runs_without_it(self):
+        self.state.refuse_temperature = True
+        _, out, _ = self.run_shoppers("--tracks", "stable", "--concurrency", "1")
+        self.assertEqual(out["tracks"]["stable"]["completed"], 4)
+        self.assertEqual(out["temperature"], "model default (the model refuses temperature)")
+        sent = [("temperature" in b) for b in self.state.model_bodies]
+        self.assertEqual(sent[:2], [True, False])  # refused once, then never sent again
+        self.assertNotIn(True, sent[1:])
+
+    def test_the_anthropic_key_can_come_from_a_dotenv_file(self):
+        env_file = os.path.join(self.tmp.name, ".env.local")
+        with open(env_file, "w") as f:
+            f.write(f"POSTGRES_PASSWORD=x\nexport ANTHROPIC_API_KEY='{ANTHROPIC_KEY}'\n")
+        _, out, _ = self.run_shoppers("--tracks", "stable", "--journeys", "1", "--env-file", env_file, key="")
+        self.assertEqual(out["tracks"]["stable"]["completed"], 1)
+        _, out, _ = self.run_shoppers("--env-file", os.path.join(self.tmp.name, "none"), key="")
+        self.assertEqual(out, {"skipped": "ANTHROPIC_API_KEY is not set"})
 
     def test_bad_flags_and_no_gateway_key_are_usage_errors(self):
         with contextlib.redirect_stderr(io.StringIO()):

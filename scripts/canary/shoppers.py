@@ -19,7 +19,9 @@ A journey:
     completed only when the harness also saw the evidence the goal needs (`needs`: for a purchase,
     an order placed AND found again through the gateway), so the model cannot claim a success that
     did not happen. No verdict within the turn limit is a failure.
-  - is a Claude Messages API tool loop: at most 8 turns, max_tokens 600, temperature 0.
+  - is a Claude Messages API tool loop: at most 8 turns, max_tokens 600, temperature 0 (a model
+    that refuses the parameter, as claude-haiku-5-5 does, runs at its default; see `temperature`
+    in the output).
 
 Budget: spend is estimated from each response's `usage` and the list prices below. Once it passes
 --budget-usd (SHOPPER_BUDGET_USD, default 0.50), or --deadline-s passes, no new turn starts and the
@@ -34,8 +36,7 @@ ok/error, the shopper's final sentence], usage, spent_usd, duration_s}, and a su
 Neither the Anthropic key nor the gateway key is ever printed or written.
 
   ANTHROPIC_API_KEY=... scripts/canary/shoppers.py --key-file tests/e2e/.out/userb2.key
-  scripts/canary/shoppers.py --base http://app.localtest.me --store http://store.localtest.me \\
-      --key-file <file> --tracks stable --journeys 2
+  scripts/canary/shoppers.py --env-file .env.local --key-file <file> --tracks stable --journeys 2
 Exit: 0 (also when skipped), 3 usage error (no gateway key, bad flags).
 """
 
@@ -267,7 +268,10 @@ def call_model(base: str, key: str, body: dict, deadline: float) -> dict:
                 return json.loads(res.read())
         except urllib.error.HTTPError as e:
             try:
-                kind = str(json.loads(e.read()).get("error", {}).get("type", ""))[:40]
+                detail = json.loads(e.read()).get("error", {})
+                kind = str(detail.get("type", ""))[:40]
+                # The API's own explanation (e.g. an unknown parameter); it never echoes the key.
+                kind += f": {sanitize_quote(detail.get('message'), 120)}" if detail.get("message") else ""
             except (ValueError, AttributeError, OSError):
                 kind = ""
             err = ModelError(e.code, kind or "error")
@@ -442,6 +446,20 @@ class Config:
     anthropic_key: str
     model: str
     max_turns: int = MAX_TURNS
+    # temperature 0 where the model takes it; newer models refuse the parameter (HTTP 400
+    # "temperature is deprecated for this model"), and then the run goes on without it.
+    temperature: bool = True
+
+
+def ask_model(cfg: Config, body: dict, deadline: float) -> dict:
+    if cfg.temperature:
+        try:
+            return call_model(cfg.anthropic_url, cfg.anthropic_key, {**body, "temperature": 0}, deadline)
+        except ModelError as e:
+            if e.status != 400 or "temperature" not in str(e):
+                raise
+            cfg.temperature = False
+    return call_model(cfg.anthropic_url, cfg.anthropic_key, body, deadline)
 
 
 def order_in(text: str, order_id: int | None) -> bool:
@@ -499,14 +517,13 @@ def run_journey(cfg: Config, j: Journey, budget: Budget, abort: threading.Event)
         body = {
             "model": cfg.model,
             "max_tokens": MAX_TOKENS,
-            "temperature": 0,
             "system": system,
             "tools": TOOLS,
             "tool_choice": {"type": "any"},
             "messages": messages,
         }
         try:
-            res = call_model(cfg.anthropic_url, cfg.anthropic_key, body, budget.deadline)
+            res = ask_model(cfg, body, budget.deadline)
         except ModelError as e:
             j.model_error = str(e)
             j.invalid = f"model API error ({e})"
@@ -602,6 +619,7 @@ def run(cfg: Config, tracks: list[str], per_track: int, concurrency: int, budget
         return {"skipped": f"Anthropic API failed before any journey completed: {errors[0]}"}
     return {
         "model": cfg.model,
+        "temperature": 0 if cfg.temperature else "model default (the model refuses temperature)",
         "tracks": {t: summarize_track([j for j in journeys if j.track == t]) for t in tracks},
         "journeys": [transcript(j) for j in journeys],
         "usage": {"input_tokens": budget.input_tokens, "output_tokens": budget.output_tokens},
@@ -660,6 +678,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com",
     )
     p.add_argument("--out", default="shoppers.json", help="'' = do not write a file")
+    p.add_argument(
+        "--env-file",
+        help="dotenv file to read ANTHROPIC_API_KEY from when it is not in the environment "
+        "(local runs: .env.local); nothing else is read from it",
+    )
     a = p.parse_args(argv)
     a.tracks = [t.strip() for t in a.tracks.split(",") if t.strip()]
     if not a.tracks or any(t not in TRACKS for t in a.tracks):
@@ -681,6 +704,22 @@ def read_key(key_file: str | None) -> str | None:
     return os.environ.get("CANARY_API_KEY", "").strip() or None
 
 
+def anthropic_key(env_file: str | None) -> str:
+    """ANTHROPIC_API_KEY from the environment, else from the dotenv file's line of that name."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if key or not env_file:
+        return key
+    try:
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                name, sep, value = line.strip().partition("=")
+                if sep and name.strip().removeprefix("export ").strip() == "ANTHROPIC_API_KEY":
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
 def write(path: str, out: dict) -> None:
     if path:
         with open(path, "w", encoding="utf-8") as f:
@@ -692,8 +731,8 @@ def main(argv: list[str] | None = None) -> int:
         a = parse_args(sys.argv[1:] if argv is None else argv)
     except SystemExit as e:
         return EXIT_USAGE if e.code else 0
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not anthropic_key:
+    model_key = anthropic_key(a.env_file)
+    if not model_key:
         out = {"skipped": "ANTHROPIC_API_KEY is not set"}
     else:
         gateway_key = read_key(a.key_file)
@@ -705,7 +744,7 @@ def main(argv: list[str] | None = None) -> int:
             store=a.store,
             gateway_key=gateway_key,
             anthropic_url=a.anthropic_url,
-            anthropic_key=anthropic_key,
+            anthropic_key=model_key,
             model=a.model,
             max_turns=a.max_turns,
         )
