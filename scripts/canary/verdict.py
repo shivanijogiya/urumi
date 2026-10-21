@@ -22,6 +22,15 @@ Verdict (exit code):
 Sending: --requests (default 60) requests, --concurrency at a time; if the canary has served fewer
 than --min-samples by then, more are sent in batches up to --max-requests.
 
+AI shoppers (#29, docs/adr/006-ai-shoppers.md), an extra signal on top of the rules above:
+--shoppers shoppers.json (scripts/canary/shoppers.py) turns the verdict into ROLLBACK when the
+canary's shopper success rate is below stable's minus --shopper-max-drop (default 0.25) with at
+least --shopper-min-journeys (default 3) valid canary journeys; the reason quotes the most common
+canary blocker (model output: sanitized, at most 160 characters). Ignored, and said so in reasons,
+when stable shoppers succeed less than --shopper-min-stable (default 0.5): an environment problem.
+Ignored silently when the shoppers were skipped (no Anthropic key, API down). --report verdict.json
+applies the shoppers to an existing report instead of probing (ci.sh runs both concurrently).
+
 Output: one JSON object {verdict, reasons[], stable{...}, canary{...}, samples{...}, thresholds,
 ...} on stdout and in --out (default verdict.json). The API key comes from --key-file or the
 CANARY_API_KEY env var and is never printed or written.
@@ -37,7 +46,10 @@ import concurrent.futures
 import json
 import math
 import os
+import re
 import sys
+import unicodedata
+from collections import Counter
 import time
 import urllib.error
 import urllib.request
@@ -73,6 +85,13 @@ class Thresholds:
     latency_slack_ms: float = 200.0
     min_success: float = 0.95
     min_samples: int = 10
+
+
+@dataclass
+class ShopperThresholds:
+    max_drop: float = 0.25
+    min_journeys: int = 3
+    min_stable: float = 0.5
 
 
 # ── Classification ──────────────────────────────────────────────────────────────────────────────
@@ -232,6 +251,114 @@ def report(samples: list[Sample], th: Thresholds, extra: dict | None = None) -> 
     return out
 
 
+# ── AI shoppers (#29) ──────────────────────────────────────────────────────────────────────────
+
+QUOTE_MAX = 160
+_URL = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)\S*")
+
+
+def sanitize_quote(text: object, limit: int = QUOTE_MAX) -> str:
+    """Model output made safe to quote in a log, an issue or a flow prompt: no control or format
+    characters, URLs, backticks, @mentions or Markdown table/HTML characters; one line; at most
+    `limit` characters."""
+    if not isinstance(text, str):
+        return ""
+    s = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") else ch for ch in text)
+    s = _URL.sub("", s)
+    s = re.sub(r"[`@<>|\\]", "", s)
+    s = " ".join(s.split())
+    if len(s) > limit:
+        s = s[: limit - 1].rstrip() + "…"
+    return s
+
+
+def load_shoppers(path: str) -> dict:
+    """shoppers.py's output, or {"skipped": reason} when there is none to use."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {"skipped": "no readable shoppers.json"}
+    if not isinstance(data, dict):
+        return {"skipped": "shoppers.json is not an object"}
+    if not data.get("skipped") and not isinstance(data.get("tracks"), dict):
+        return {"skipped": "shoppers.json has no tracks"}
+    return data
+
+
+def _track_counts(t: object) -> dict:
+    t = t if isinstance(t, dict) else {}
+    valid, completed = t.get("valid"), t.get("completed")
+    valid = valid if isinstance(valid, int) and valid >= 0 else 0
+    completed = completed if isinstance(completed, int) and 0 <= completed <= valid else 0
+    rate = round(completed / valid, 4) if valid else None
+    return {"valid": valid, "completed": completed, "invalid": t.get("invalid"), "success_rate": rate}
+
+
+def customer_voice(blockers: object) -> str | None:
+    """The most common canary blocker (first seen wins a tie), sanitized; None if there is none."""
+    quotes = [sanitize_quote(b) for b in blockers if isinstance(b, str)] if isinstance(blockers, list) else []
+    quotes = [q for q in quotes if q]
+    if not quotes:
+        return None
+    counts = Counter(quotes)
+    return max(quotes, key=lambda q: (counts[q], -quotes.index(q)))
+
+
+def apply_shoppers(out: dict, shoppers: dict, sth: ShopperThresholds) -> dict:
+    """The report with the shopper rule applied (an extra ROLLBACK reason, never a PROMOTE).
+    Starts from the probe's own verdict (probe_verdict/probe_reasons), so applying twice is the
+    same as applying once."""
+    out = dict(out)
+    verdict = out.setdefault("probe_verdict", out["verdict"])
+    reasons = list(out.setdefault("probe_reasons", list(out["reasons"])))
+    block: dict = {"thresholds": asdict(sth)}
+    for k in ("model", "spent_usd"):
+        if k in shoppers:
+            block[k] = shoppers[k]
+    voice = None
+    if shoppers.get("skipped"):
+        block.update(status="skipped", note=sanitize_quote(shoppers["skipped"], 200))
+    else:
+        tracks = shoppers["tracks"]
+        st, ca = _track_counts(tracks.get("stable")), _track_counts(tracks.get("canary"))
+        block.update(stable=st, canary=ca)
+        tally = (
+            f"{ca['completed']}/{ca['valid']} journeys completed on canary vs "
+            f"{st['completed']}/{st['valid']} on stable"
+        )
+        if st["valid"] == 0 or st["success_rate"] + EPS < sth.min_stable:
+            note = (
+                f"AI shoppers ignored: only {st['completed']}/{st['valid']} journeys completed on "
+                f"stable (< {pct(sth.min_stable)}): an environment problem, not the canary"
+            )
+            block.update(status="ignored", note=note)
+            reasons.append(note)
+        elif ca["valid"] < sth.min_journeys:
+            note = f"AI shoppers ignored: only {ca['valid']} valid canary journeys (< {sth.min_journeys})"
+            block.update(status="ignored", note=note)
+            reasons.append(note)
+        else:
+            block["status"] = "used"
+            voice = customer_voice((tracks.get("canary") or {}).get("blockers"))
+            if ca["success_rate"] + EPS < st["success_rate"] - sth.max_drop:
+                quote = f' — "{voice}"' if voice else ""
+                msg = f"AI shoppers: {tally}{quote}"
+                block["rollback"] = True
+                if verdict == "PROMOTE":
+                    verdict, reasons = "ROLLBACK", [msg]
+                else:
+                    reasons.append(msg)
+            else:
+                block["rollback"] = False
+                if verdict == "PROMOTE":  # a passing check is a reason only for a PROMOTE
+                    limit = f"rollback below stable - {sth.max_drop * 100:g} points"
+                    reasons.append(f"AI shoppers: {tally} ({limit})")
+    block["customer_voice"] = voice
+    out.update(verdict=verdict, reasons=reasons, shoppers=block, customer_voice=voice)
+    return out
+
+
 # ── Sending ────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -327,7 +454,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--min-samples", type=int, default=Thresholds.min_samples)
     p.add_argument("--out", default="verdict.json", help="'' = do not write a file")
     p.add_argument("--samples-file", help="decide from recorded samples (JSON list) instead")
+    p.add_argument("--report", help="start from this verdict.py report instead of probing")
+    p.add_argument("--shoppers", help="shoppers.json from scripts/canary/shoppers.py (#29)")
+    p.add_argument("--shopper-max-drop", type=float, default=ShopperThresholds.max_drop)
+    p.add_argument("--shopper-min-journeys", type=int, default=ShopperThresholds.min_journeys)
+    p.add_argument("--shopper-min-stable", type=float, default=ShopperThresholds.min_stable)
     a = p.parse_args(argv)
+    if a.report and a.samples_file:
+        p.error("--report and --samples-file are exclusive")
+    if a.shopper_min_journeys < 1 or not 0 <= a.shopper_max_drop <= 1:
+        p.error("--shopper-min-journeys must be >= 1 and --shopper-max-drop 0..1")
     if a.requests < 1 or a.concurrency < 1 or a.min_samples < 1:
         p.error("--requests, --concurrency and --min-samples must be >= 1")
     if a.max_requests is None:
@@ -378,7 +514,17 @@ def main(argv: list[str] | None = None) -> int:
         min_success=a.min_success,
         min_samples=a.min_samples,
     )
-    if a.samples_file:
+    out = None
+    if a.report:
+        try:
+            with open(a.report, encoding="utf-8") as f:
+                out = json.load(f)
+        except (OSError, ValueError):
+            out = None
+        if not isinstance(out, dict) or out.get("verdict") not in EXIT:
+            print(f"verdict.py: error: {a.report} is not a verdict.py report", file=sys.stderr)
+            return EXIT_USAGE
+    elif a.samples_file:
         samples = load_samples(a.samples_file)
         extra = {"source": "samples-file"}
     else:
@@ -404,7 +550,15 @@ def main(argv: list[str] | None = None) -> int:
             "duration_s": round(time.monotonic() - started, 1),
             "errors_seen": sorted({s.error for s in samples if s.error}),
         }
-    out = report(samples, th, extra)
+    if out is None:
+        out = report(samples, th, extra)
+    if a.shoppers:
+        sth = ShopperThresholds(
+            max_drop=a.shopper_max_drop,
+            min_journeys=a.shopper_min_journeys,
+            min_stable=a.shopper_min_stable,
+        )
+        out = apply_shoppers(out, load_shoppers(a.shoppers), sth)
     text = json.dumps(out, indent=2)
     print(text)
     if a.out:
