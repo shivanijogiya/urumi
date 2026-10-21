@@ -1,10 +1,11 @@
 # Self-healing demo (#28)
 
 The whole loop, end to end: a bad merge, canary ROLLBACK, an incident, an autoheal MR, an automatic
-canary PROMOTE, a human approval, the postmortem, and the merge. Design: [ADR 005](../../docs/adr/005-self-healing.md).
+canary PROMOTE, the postmortem, a human merge, and the automatic close. Design: [ADR 005](../../docs/adr/005-self-healing.md).
 Flows must be registered and enabled first, and the CI variable `DUO_DISPATCH_TOKEN` must be set
 (docs/HACKATHON.md, "Register the flows"; [ADR 007](../../docs/adr/007-duo-dispatch.md)). CI
-assigns the incident to the incident bot; the postmortem starts when a person mentions its bot.
+assigns the incident to the incident bot and, after the fix's canary PROMOTEs, mentions the
+postmortem bot (`duo:postmortem`, #33). The only human step is the merge.
 
 ## 0. Check the regression offline (optional, 2 min)
 
@@ -62,10 +63,12 @@ low risk. Its canary is manual, so leave it. **Merge** the MR. The merge starts 
 - `autoheal:report` then shows as failed (allowed to fail; it fails on purpose). Its log has
   `AUTOHEAL_VERDICT_JSON: {"decision":"PROMOTE",...}`. The pipeline passes with warnings.
 
-## 5. Approve (a person) → postmortem (automatic)
+## 5. Postmortem (automatic)
 
-- **Approve** the autoheal MR, then comment `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>`
-  on it. The **Autoheal postmortem** session reads the verdict line for the MR's head pipeline.
+- After `autoheal:report`, the job `duo:postmortem` comments
+  `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>: the canary verified this fix ...` on the
+  MR. (If GitLab does not start the flow on a bot's mention, post that comment yourself.) The
+  **Autoheal postmortem** session reads the verdict block for the MR's head pipeline.
   On PROMOTE it:
   - posts `## Postmortem (autoheal)` on the incident (impact, detection minutes, time to fix,
     root cause, fix, what limited impact, action items);
@@ -75,8 +78,9 @@ low risk. Its canary is manual, so leave it. **Merge** the MR. The merge starts 
 
 ## 6. Merge (a person)
 
-**Merge** the autoheal MR. main's canary promotes the fix. Close the regression issue (an action
-item of the postmortem).
+**Merge** the autoheal MR. main's canary promotes the fix, and `duo:release-close` (#34) posts
+"Released and verified" on the incident, closes it (`status::resolved`) and closes the regression
+issue.
 
 ## Reset
 

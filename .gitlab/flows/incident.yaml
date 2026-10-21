@@ -293,10 +293,10 @@ prompts:
              - Verdict: the reasons as bullets and a Metric | Stable | Canary table (requests,
                error rate, tool success, p95 ms) from the incident.
              - Fix: targeted hunk revert or full revert, files changed, what is kept.
-             - Verification: "The canary runs automatically on this MR (autoheal/ branch). A
-               person reviews and approves, then mentions
-               @ai-canary-postmortem-gitlab-ai-hackathon on this MR; the postmortem flow checks
-               the canary verdict and posts the postmortem. Nothing is merged automatically."
+             - Verification: "The canary runs automatically on this MR (autoheal/ branch). When
+               it verifies the fix, CI mentions the postmortem account
+               (ai-canary-postmortem-gitlab-ai-hackathon) on this MR; the postmortem flow checks the canary verdict and posts the postmortem.
+               A person reviews and merges; nothing is merged automatically."
         9. create_issue_note on the incident and on the regression issue: one line
            "Autoheal: fix proposed in !<mr iid> (<mr url>), to be verified by its canary."
         Needs human: create_issue_note on the incident and the regression issue starting with

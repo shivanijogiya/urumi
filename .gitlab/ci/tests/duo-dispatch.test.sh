@@ -8,6 +8,12 @@
 #     `canary` with its artifacts; duo:incident:bad-release does the same for `canary:bad-release`
 #     (`when: always`, since an allowed failure does not trigger on_failure); both run
 #     `dispatch.py incident --record verdict.json`
+#   - duo:postmortem (#33) runs only on autoheal/ MR pipelines, after autoheal:report wrote the
+#     verdict block (needs autoheal:report and canary with its artifacts, `when: always`, since
+#     autoheal:report always fails on purpose), and runs
+#     `dispatch.py postmortem "$CI_MERGE_REQUEST_IID" --record verdict.json`
+#   - duo:release-close (#34) runs only on default-branch (non-MR) pipelines, needs `canary` with
+#     its artifacts, `when: on_success`, and runs `dispatch.py release-close --record verdict.json`
 #   - the canary jobs keep `verdict.json` as an artifact even when they fail
 #   - every dispatch job is allow_failure, small (python:3.12-alpine) and times out in 2 minutes
 #   - DUO_DISPATCH_TOKEN is never named in a job script (read from the environment by
@@ -51,10 +57,12 @@ to_json() {
 JQ_LIB='
 def resolved($n): . as $root
   | ([$root[$n].extends // []] | flatten | map(. as $p | $root | resolved($p)) | add // {}) * ($root[$n] | del(.extends));
-def duo_jobs: ["duo:risk-gate", "duo:incident", "duo:incident:bad-release"];
+def duo_jobs: ["duo:risk-gate", "duo:incident", "duo:incident:bad-release", "duo:postmortem",
+  "duo:release-close"];
 def mr_if: . == "$CI_PIPELINE_SOURCE == \"merge_request_event\"";
 def main_only_if: contains("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH")
   and contains("$CI_PIPELINE_SOURCE != \"merge_request_event\"");
+def autoheal_mr_if: . == "$CI_PIPELINE_SOURCE == \"merge_request_event\" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^autoheal\\//";
 '
 
 D="$TMP/duo.json"
@@ -72,9 +80,9 @@ done
 
 check "root .gitlab-ci.yml includes duo-dispatch.gitlab-ci.yml" "$G" \
   '[.include[] | select(.local == ".gitlab/ci/duo-dispatch.gitlab-ci.yml")] | length == 1'
-check "only the three duo jobs and the hidden template" "$D" \
+check "only the five duo jobs and the hidden template" "$D" \
   '(keys | sort) == ([".duo-dispatch"] + duo_jobs | sort)'
-out="$(jq -r --slurpfile r "$G" '[.["duo:risk-gate"], .["duo:incident"], .["duo:incident:bad-release"]]
+out="$(jq -r --slurpfile r "$G" "$JQ_LIB"' [duo_jobs[] as $j | .[$j]]
   | all(.stage as $s | $s == ".pre" or ($r[0].stages | index($s) != null))' "$D" 2>&1)"
 [ "$out" = true ] && ok "every duo job stage is .pre or a root stage" \
   || bad "every duo job stage is .pre or a root stage" "$out"
@@ -108,6 +116,30 @@ check "both incident jobs run dispatch.py incident on verdict.json" "$D" \
   '[.["duo:incident"].script, .["duo:incident:bad-release"].script]
    == [["python3 scripts/duo/dispatch.py incident --record verdict.json"],
        ["python3 scripts/duo/dispatch.py incident --record verdict.json"]]'
+
+# postmortem (#33): autoheal MR pipelines, after autoheal:report wrote the verdict block
+check "duo:postmortem: one rule, autoheal/ MR pipelines only, when always" "$D" \
+  '.["duo:postmortem"].rules as $r | ($r | length) == 1 and ($r[0].if | autoheal_mr_if)
+   and $r[0].when == "always"'
+check "duo:postmortem: needs autoheal:report and canary with artifacts, in their stage" "$D" \
+  '.["duo:postmortem"] | .stage == "deploy"
+   and ([.needs[] | if type == "string" then {"job": .} else . end | .job] | sort) == ["autoheal:report", "canary"]
+   and ([.needs[] | objects | select(.job == "canary") | .artifacts] == [true])'
+check "duo:postmortem: autoheal:report has the same autoheal/ MR rule (so the need exists)" "$C" \
+  '.["autoheal:report"].rules | length == 1 and (.[0].if | autoheal_mr_if) and .[0].when == "always"'
+check "duo:postmortem: runs dispatch.py postmortem for this MR on verdict.json" "$D" \
+  '.["duo:postmortem"].script
+   == ["python3 scripts/duo/dispatch.py postmortem \"$CI_MERGE_REQUEST_IID\" --record verdict.json"]'
+
+# release-close (#34): default branch, after main's canary passed
+check "duo:release-close: one rule, default branch only (never MR), when on_success" "$D" \
+  '.["duo:release-close"].rules as $r | ($r | length) == 1 and ($r[0].if | main_only_if)
+   and $r[0].when == "on_success"'
+check "duo:release-close: needs canary with artifacts (and human approval if any), in canary's stage" "$D" \
+  '.["duo:release-close"] | .needs == [{"job": "canary", "artifacts": true}, {"job": "release:human-approval", "optional": true}] and .stage == "deploy"'
+check "duo:release-close: runs dispatch.py release-close on verdict.json" "$D" \
+  '.["duo:release-close"].script == ["python3 scripts/duo/dispatch.py release-close --record verdict.json"]'
+
 check "canary jobs keep verdict.json as an artifact when they fail" "$C" \
   '.canary.artifacts | .when == "always" and (.paths | index("verdict.json") != null)'
 check "canary:bad-release inherits canary's artifacts" "$C" \
@@ -118,7 +150,7 @@ check "release:config-tests runs this test" "$TMP/release.json" \
   '.["release:config-tests"].script | join("\n") | contains(".gitlab/ci/tests/duo-dispatch.test.sh")'
 
 # --- secret hygiene (raw text) ---------------------------------------------------------------
-SCRIPT_LINES="$(jq -r '. as $f | ["duo:risk-gate","duo:incident","duo:incident:bad-release"][]
+SCRIPT_LINES="$(jq -r "$JQ_LIB"' . as $f | duo_jobs[]
   | . as $j | $f[$j] | (.before_script // []), .script, (.after_script // []) | .[]' "$D")"
 if printf '%s\n' "$SCRIPT_LINES" | grep -q 'DUO_DISPATCH_TOKEN'; then
   bad "no job script names DUO_DISPATCH_TOKEN (dispatch.py reads it from the environment)"
@@ -137,13 +169,16 @@ else
 fi
 
 # --- dispatch.py behaviour --------------------------------------------------------------------
-out="$(env -u DUO_DISPATCH_TOKEN python3 "$ROOT/scripts/duo/dispatch.py" risk-gate 1 2>&1)"
-code=$?
-if [ "$code" -eq 0 ] && [ "$out" = "DUO_DISPATCH_TOKEN not set; skipping Duo dispatch" ]; then
-  ok "dispatch.py without DUO_DISPATCH_TOKEN prints one line and exits 0"
-else
-  bad "dispatch.py without DUO_DISPATCH_TOKEN prints one line and exits 0" "exit $code: $out"
-fi
+for args in "risk-gate 1" "postmortem 1 --record verdict.json" "release-close --record verdict.json"; do
+  # shellcheck disable=SC2086 # word splitting of $args is intended
+  out="$(env -u DUO_DISPATCH_TOKEN python3 "$ROOT/scripts/duo/dispatch.py" $args 2>&1)"
+  code=$?
+  if [ "$code" -eq 0 ] && [ "$out" = "DUO_DISPATCH_TOKEN not set; skipping Duo dispatch" ]; then
+    ok "dispatch.py ${args%% *} without DUO_DISPATCH_TOKEN prints one line and exits 0"
+  else
+    bad "dispatch.py ${args%% *} without DUO_DISPATCH_TOKEN prints one line and exits 0" "exit $code: $out"
+  fi
+done
 if out="$(python3 -m unittest discover -s "$ROOT/scripts/duo" -p 'test_*.py' 2>&1)"; then
   ok "scripts/duo unit tests pass ($(printf '%s\n' "$out" | grep -E '^Ran ' || true))"
 else

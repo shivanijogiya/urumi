@@ -11,7 +11,19 @@
 #                                  default branch. That job is allow_failure, and an allowed
 #                                  failure does not count for `when: on_failure`, so this one runs
 #                                  `when: always`; dispatch.py acts only on decision ROLLBACK.
-# The postmortem flow stays a deliberate human mention of its account on the approved autoheal MR.
+#   duo:postmortem                 autoheal/ MR pipelines (#33), after autoheal:report wrote the
+#                                  verdict block: on PROMOTE (or PROMOTE_PENDING_APPROVAL) post one
+#                                  note mentioning the postmortem account on the open autoheal MR
+#                                  (.gitlab/flows/postmortem.yaml, trigger Mention), before a person
+#                                  merges. autoheal:report always fails on purpose, so this runs
+#                                  `when: always` and dispatch.py decides from verdict.json; the
+#                                  note's `postmortem-dispatch: pipeline <id>` line makes it once
+#                                  per pipeline.
+#   duo:release-close              default branch (#34), after `canary` passed: on PROMOTE (or
+#                                  PROMOTE_PENDING_APPROVAL) close the incident of each merged
+#                                  autoheal MR in this commit (note, status::resolved) and its open
+#                                  regression issue. Not a flow dispatch; same token and template.
+# The only human action left in the loop is reviewing and merging the autoheal MR.
 # Token: CI/CD variable DUO_DISPATCH_TOKEN (project access token, api scope, Developer role; masked,
 # not protected, because MR pipelines need it; ADR 007 has the trade-off). Read from the
 # environment only, never echoed or passed as an argument. Unset: dispatch.py prints one line
@@ -59,3 +71,35 @@ duo:incident:bad-release:
       allow_failure: true
   script:
     - python3 scripts/duo/dispatch.py incident --record verdict.json
+
+duo:postmortem:
+  extends: .duo-dispatch
+  stage: deploy
+  needs:
+    - job: autoheal:report
+      artifacts: false
+    - job: canary
+      artifacts: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^autoheal\//
+      when: always
+      allow_failure: true
+  script:
+    - python3 scripts/duo/dispatch.py postmortem "$CI_MERGE_REQUEST_IID" --record verdict.json
+
+duo:release-close:
+  extends: .duo-dispatch
+  stage: deploy
+  needs:
+    - job: canary
+      artifacts: true
+    # A high-risk release (PROMOTE_PENDING_APPROVAL) is released only after a person runs
+    # release:human-approval; wait for it. Low-risk pipelines have no such job (optional).
+    - job: release:human-approval
+      optional: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+      allow_failure: true
+  script:
+    - python3 scripts/duo/dispatch.py release-close --record verdict.json
