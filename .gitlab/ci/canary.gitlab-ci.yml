@@ -7,8 +7,9 @@
 # so does HOLD. A PROMOTE of a high-risk change (RISK=high from risk:classify) is recorded as
 # PROMOTE_PENDING_APPROVAL and waits for a person at release:human-approval (#24). On the default
 # branch the job is not allow_failure, so a
-# rejected release fails main's pipeline, which is what fires the incident flow (#24,
-# .gitlab/flows/incident.yaml, trigger: Pipeline events -> Failed). On MRs it stays manual and
+# rejected release fails main's pipeline, and `duo:incident` (#27,
+# .gitlab/ci/duo-dispatch.gitlab-ci.yml) opens the incident issue from verdict.json and assigns
+# it to the incident flow (.gitlab/flows/incident.yaml, trigger: Assign). On MRs it stays manual and
 # allow_failure, so a rejected canary never blocks review, except on `autoheal/` branches (#28,
 # docs/adr/005-self-healing.md): the incident flow's healer opens those MRs, and their canary runs
 # automatically and is not allow_failure, so the fix is verified with no human click and a fix
@@ -96,9 +97,10 @@ canary:
 
 # Forced bad release: same pipeline, the canary carries injected faults. Manual everywhere, so a
 # ROLLBACK lands in the pipeline history on demand (H4). It is allow_failure everywhere so it never
-# leaves main "blocked". To fail main's pipeline on purpose (the incident-flow drill), a person runs
-# a pipeline on main from the UI with variable CANARY_FORCE_BAD=1: the automatic `canary` job then
-# rolls back and fails the pipeline, a human-initiated failure, so the incident flow fires. ADR 004.
+# leaves main "blocked"; on main, `duo:incident:bad-release` still dispatches its incident (#27). To
+# fail main's pipeline on purpose (the incident drill), a person runs a pipeline on main from the
+# UI with variable CANARY_FORCE_BAD=1: the automatic `canary` job then rolls back and fails the
+# pipeline, and `duo:incident` dispatches the incident. ADR 004, ADR 007.
 canary:bad-release:
   extends: canary
   variables:
