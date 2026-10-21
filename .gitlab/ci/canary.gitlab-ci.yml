@@ -9,7 +9,11 @@
 # branch the job is not allow_failure, so a
 # rejected release fails main's pipeline, which is what fires the incident flow (#24,
 # .gitlab/flows/incident.yaml, trigger: Pipeline events -> Failed). On MRs it stays manual and
-# allow_failure, so a rejected canary never blocks review. `canary:bad-release` is the same job with
+# allow_failure, so a rejected canary never blocks review, except on `autoheal/` branches (#28,
+# docs/adr/005-self-healing.md): the incident flow's healer opens those MRs, and their canary runs
+# automatically and is not allow_failure, so the fix is verified with no human click and a fix
+# that does not hold fails its pipeline. Stable is the last promoted commit, the canary this one
+# (scripts/canary/ci.sh), hence GIT_DEPTH 0. `canary:bad-release` is the same job with
 # CANARY_FORCE_BAD=1: a 50 % tools/call error rate is injected into the canary, the verdict must be
 # ROLLBACK and the job then fails on purpose (a one-click, human-initiated drill; no CI variables
 # needed). The log carries one `CANARY_VERDICT_JSON: {...}` line. Artifacts: verdict.json, dotenv
@@ -63,9 +67,12 @@ canary:
     DOCKER_TLS_CERTDIR: ''
     K3D_VERSION: v5.9.0
     CANARY_FORCE_BAD: '0'
+    GIT_DEPTH: '0' # the stable baseline commit must be in the clone
   cache: []
   timeout: 45m
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^autoheal\//
+      allow_failure: false
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: manual
       allow_failure: true
@@ -103,6 +110,26 @@ canary:bad-release:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
       allow_failure: true
+
+# Verdict of an autoheal MR's canary, readable by the postmortem flow (#28,
+# .gitlab/flows/postmortem.yaml; docs/adr/005-self-healing.md). The flow can read job logs
+# (get_logs_from_job) but finds jobs only through get_pipeline_failing_jobs, and a verified fix has
+# a successful canary. This job prints verdict.json as one `AUTOHEAL_VERDICT_JSON: {...}` line and
+# exits 1 on purpose: it is listed as failing, allow_failure keeps the pipeline green. It runs even
+# when the canary failed (when: always), and then reports that verdict, or decision NONE.
+autoheal:report:
+  stage: deploy
+  image: python:3.12-alpine
+  cache: []
+  needs:
+    - job: canary
+      artifacts: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^autoheal\//
+      when: always
+      allow_failure: true
+  script:
+    - python3 scripts/canary/autoheal_report.py --verdict verdict.json
 
 # Human approval of a high-risk release (#24, H3). Manual and not allow_failure, so the pipeline
 # shows "blocked" until a person runs it; scripts/canary/approval.py records who (GITLAB_USER_LOGIN
