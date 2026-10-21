@@ -1,7 +1,13 @@
 # Hackathon story: from commit to canary verdict, risk gate and incident
 
-Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing). ADRs: [003 canary](adr/003-canary.md),
-[004 Duo flows](adr/004-duo-flows.md), [005 self-healing](adr/005-self-healing.md).
+Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing), #27 (H4, Duo dispatch). ADRs:
+[003 canary](adr/003-canary.md), [004 Duo flows](adr/004-duo-flows.md),
+[005 self-healing](adr/005-self-healing.md), [007 Duo dispatch](adr/007-duo-dispatch.md).
+
+**How the flows start.** GitLab gives each custom flow one trigger: **Mention**, **Assign** or
+**Assign reviewer** of the flow's service account, and the flow's goal is just the iid of that
+MR or issue. CI makes those assignments (`scripts/duo/dispatch.py`), so no one has to click,
+except for the postmortem, which is a deliberate mention by a person.
 
 ## The story in one pipeline
 
@@ -22,17 +28,21 @@ Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing). ADRs: [003 canary](adr/
 6. **Risk gate.** A PROMOTE of a **high-risk** change (auth, keys, users, crypto, HTTP/MCP
    surface, SSRF guard, NetworkPolicy, values, RBAC, Secrets, CI) is not promoted. The result is
    `PROMOTE_PENDING_APPROVAL`, and the pipeline waits at the manual **`release:human-approval`**
-   job. The Duo **risk-gate** flow explains why on the MR.
+   job. The Duo **risk-gate** flow explains why on the MR: `duo:risk-gate` adds its account as
+   a reviewer on every MR pipeline.
 7. **Incident.** A ROLLBACK fails the job (`RELEASE REJECTED: canary rolled back`) and so fails
-   the pipeline. The Duo **incident** flow reads the verdict from the job log and opens an
-   **incident** and a **`priority::high` regression issue**.
+   the pipeline. `duo:incident` opens the **incident** issue with the canary record inside and
+   assigns it to the incident bot. The Duo **incident** flow investigates (job log, commits
+   since the stable baseline), opens a **`priority::high` regression issue** and posts a triage
+   note.
 8. **Heal.** In the same session, the **healer** finds the suspect gateway commit, explains the
    hunk against the verdict, and opens MR **`Autoheal: <root cause> (incident #N)`** (label
    `autoheal`) with the smallest fix (a targeted hunk revert). If it is unsure, or the suspect
    touched CI, charts or secrets, it comments "needs human" instead.
 9. **Verify, approve, postmortem.** The autoheal MR's `canary` runs **automatically**: stable is
-   the last promoted commit and the canary is the fix. A person approves. The Duo **postmortem**
-   flow reads the verdict from `autoheal:report`. On PROMOTE it posts a blameless postmortem on
+   the last promoted commit and the canary is the fix. A person approves, then mentions
+   `@ai-canary-postmortem-gitlab-ai-hackathon` on the MR. The Duo **postmortem** flow reads the
+   verdict from `autoheal:report`. On PROMOTE it posts a blameless postmortem on
    the incident, labels it `status::mitigated`, and notes "verified by canary, ready to merge".
    A person merges.
 
@@ -48,16 +58,17 @@ flowchart LR
   M --> C{canary 20%<br/>vs last promoted}
   C -->|PROMOTE| P[promoted]
   C -->|ROLLBACK| F[pipeline failed]
-  F -->|Pipeline failed| I[[incident flow]]
-  I --> INC[incident + regression issue]
+  F -->|duo:incident opens + assigns| INC[incident issue]
+  INC -->|Assign| I[[incident flow]]
+  I --> REG[triage note + regression issue]
   I -->|healable| HE[healer]
   HE -->|unsure / forbidden path| NH[note: needs human]
   HE --> AM[autoheal MR<br/>label autoheal]
   AM --> AC{canary, automatic<br/>autoheal/ rule}
   AC --> AR[autoheal:report<br/>AUTOHEAL_VERDICT_JSON]
   AC -->|ROLLBACK| AF[MR pipeline failed]
-  AR --> H2([person approves])
-  H2 -->|Merge request approved| PM[[postmortem flow]]
+  AR --> H2([person approves,<br/>mentions postmortem bot])
+  H2 -->|Mention| PM[[postmortem flow]]
   PM -->|PROMOTE| PMN[postmortem on incident<br/>status::mitigated<br/>MR: ready to merge]
   PM -->|not PROMOTE| NV[note: not verified]
   PMN --> H3([person merges]) --> M
@@ -65,7 +76,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  MR[Merge request] -->|MR created / ready| RG[[Duo flow: risk-gate]]
+  MR[Merge request] -->|duo:risk-gate: Assign reviewer| RG[[Duo flow: risk-gate]]
   RG -->|note + risk:: labels| MR
   RG -.->|not low| HI{{Human Input<br/>approve / reject}}
   MR --> P[Pipeline]
@@ -79,9 +90,9 @@ flowchart LR
     V -->|ROLLBACK| RB[rolled back<br/>job fails]
     V -->|HOLD| HD[rolled back<br/>job fails]
   end
-  RB -->|Pipeline failed| IF[[Duo flow: incident]]
-  IF -->|reads CANARY_VERDICT_JSON| IF
-  IF --> INC[Incident issue]
+  RB -->|duo:incident| INC[Incident issue<br/>CANARY_VERDICT_JSON block]
+  INC -->|Assign| IF[[Duo flow: incident]]
+  IF -->|triage note| INC
   IF --> REG[Regression issue<br/>priority::high · type::regression · app::gateway]
 ```
 
@@ -95,6 +106,8 @@ flowchart LR
 | Risk classifier                         | `scripts/canary/risk.py` (`--list-globs` prints rules)             |
 | Approval record                         | `scripts/canary/approval.py` → `approval.json`                     |
 | Flows                                   | `.gitlab/flows/incident.yaml`, `risk-gate.yaml`, `postmortem.yaml` |
+| Flow dispatch (assign the bot accounts) | `.gitlab/ci/duo-dispatch.gitlab-ci.yml`, `scripts/duo/dispatch.py` |
+| Dispatch CI policy test                 | `.gitlab/ci/tests/duo-dispatch.test.sh`                            |
 | Flow policy + rule parity test          | `.gitlab/flows/tests/flows.test.sh`                                |
 | Canary baseline + seeded orders         | `scripts/canary/ci.sh`, `seed-orders.sh`                           |
 | Autoheal verdict for the postmortem     | `autoheal:report` → `scripts/canary/autoheal_report.py`            |
@@ -113,37 +126,36 @@ Prerequisites (once): Duo Agent Platform is on for the group, and GitLab Credits
 Custom flows are allowed: group **Settings > GitLab Duo > Change configuration > Allow custom
 flows**. You need the Maintainer role in the project.
 
-1. **Create the incident flow.** Project **AI > Flows > New flow**.
-   - Display name `Canary incident`. Description `Rollback -> incident + priority::high
-regression issue`.
-   - Visibility **Private**.
-   - Configuration: select **Flow**, then paste all of `.gitlab/flows/incident.yaml`.
-   - **Create flow**.
-2. **Create the risk-gate flow** the same way. Display name `Release risk gate`, Visibility
-   **Private**, paste `.gitlab/flows/risk-gate.yaml`, **Create flow**. Create the **postmortem
-   flow** the same way too: display name `Autoheal postmortem`, description `Approved autoheal MR
--> verify canary -> postmortem`, paste `.gitlab/flows/postmortem.yaml`. **Re-paste
-   `incident.yaml`** into the existing Canary incident flow, because it gained the healer step.
-3. **Enable each flow in the project, with its trigger.** **AI > Flows > Managed** tab, then
-   select the flow, then **Enable** (upper right).
-   - Project: this project.
-   - **Canary incident**: Add triggers, event type **Pipeline events**, action **Failed**.
-   - **Autoheal postmortem**: Add triggers, event type **Merge request**, action **Approved**
-     (GitLab 19.1+).
-   - **Release risk gate**: Add triggers, event type **Merge request**, action **Created**. Add
-     a second trigger with event type **Merge request ready** (if your version lists "Marked
-     ready" as an action of Merge request, use that instead).
-   - Leave Instructions empty. The YAML carries the instructions.
-   - **Enable**. GitLab creates the flow's service account (`ai-<flow>-<group>`) and adds it to
-     the project as Developer. If the trigger form asks for a **service account**, pick that one.
-   - If your version has a separate **AI > Triggers > New flow trigger** page, choose the same
-     flow, event and action there.
+1. **Paste the three YAMLs.** Project **AI > Flows > New flow** (or open the existing flow and
+   edit it), select **Flow**, paste the file, Visibility **Private**:
+   - `Canary incident` ← `.gitlab/flows/incident.yaml`
+   - `Release risk gate` ← `.gitlab/flows/risk-gate.yaml`
+   - `Autoheal postmortem` ← `.gitlab/flows/postmortem.yaml`
+     After #27 all three changed (goal = an iid), so re-paste them even if they already exist.
+2. **Enable** each flow in this project (**AI > Flows > Managed**, select the flow,
+   **Enable**). GitLab creates the flow's service account and its trigger automatically. Leave
+   Instructions empty: the YAML carries them. The triggers this repo expects:
+
+   | Flow                | Service account (user id)                             | Trigger         | Who fires it                       |
+   | ------------------- | ----------------------------------------------------- | --------------- | ---------------------------------- |
+   | Release risk gate   | `ai-release-risk-gate-gitlab-ai-hackathon` (43587203) | Assign reviewer | `duo:risk-gate`, every MR pipeline |
+   | Canary incident     | `ai-canary-incident-gitlab-ai-hackathon` (43587207)   | Assign          | `duo:incident` after a ROLLBACK    |
+   | Autoheal postmortem | `ai-canary-postmortem-gitlab-ai-hackathon` (43587198) | Mention         | a person, on the approved MR       |
+
+   If the ids differ after re-creating a flow, update `RISK_GATE_USER_ID` / `INCIDENT_USER_ID`
+   in `scripts/duo/dispatch.py`.
+
+3. **CI variable `DUO_DISPATCH_TOKEN`.** **Settings > Access tokens**: create a project access
+   token, role **Developer**, scope **api**, with a short expiry. Then go to **Settings > CI/CD >
+   Variables** and add it as `DUO_DISPATCH_TOKEN`: **Masked**, _not_ Protected (MR pipelines
+   need it), with Expand off. Without it, the dispatch jobs print `DUO_DISPATCH_TOKEN not set;
+skipping Duo dispatch` and pass. ADR 007 has the trade-offs.
 4. **Project settings for the gate.** **Settings > Merge requests > Merge checks > Pipelines
    must succeed**, so a blocked high-risk MR pipeline can't be merged. Optional: create the
-   labels `priority::high`, `type::regression`, `app::gateway`, `incident`, `canary::rollback`,
-   `risk::high`, `risk::low`, `gate::infra`, `autoheal` and `status::mitigated` in
-   **Manage > Labels** to pick colours. GitLab
-   creates missing labels on use anyway.
+   labels `priority::high`, `type::regression`, `app::gateway`, `incident`, `status::ready`,
+   `status::triaged`, `risk::high`, `risk::low`, `gate::infra`, `autoheal` and
+   `status::mitigated` in **Manage > Labels** to pick colours. GitLab creates missing labels on
+   use anyway.
 
 ## Demo script
 
@@ -151,8 +163,9 @@ regression issue`.
 
 1. Branch, change one line in `apps/gateway/src/auth/session.ts` (a comment is enough), push,
    and open an MR.
-2. Within a minute or two the **Release risk gate** session posts a note: `Release risk gate:
-HIGH`, the matched path, and what reviewers should check. It also adds the labels `risk::high`
+2. The MR pipeline's first job, `duo:risk-gate`, adds `ai-release-risk-gate-gitlab-ai-hackathon`
+   as a reviewer. Within a minute or two the **Release risk gate** session posts a note:
+   `Release risk gate: HIGH`, the matched path, and what reviewers should check. It also adds the labels `risk::high`
    and `gate::infra`. The flow's session page (from the project's AI menu) waits for **Human
    Input**. Approve it, and a second note records the decision.
 3. The MR pipeline shows `risk:classify` with `RISK: high` and the matched path, and then
@@ -161,23 +174,30 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
 4. Contrast: an MR that only touches `docs/` gets `Release risk gate: LOW` and `risk::low`, and
    has no approval job.
 
-**(b) Rollback opens an incident.**
+**(b) Rollback opens an incident (the drill).**
 
 1. **Build > Pipelines > Run pipeline** on `main`, with the variable `CANARY_FORCE_BAD` = `1`.
-   The automatic `canary` job injects a 50% error rate into the canary. (Clicking the manual
-   `canary:bad-release` job also produces a ROLLBACK, but it is `allow_failure`, so it does not fail
-   the pipeline or fire the incident flow.)
-2. When the job finishes (it builds a whole cluster, so allow several minutes), its log ends with `CANARY VERDICT: ROLLBACK -> ROLLBACK,
-rolled-back`, the `CANARY_VERDICT_JSON: {...}` line, and `ERROR: RELEASE REJECTED: canary rolled
-back`. The job and the pipeline are **failed**.
-3. The **Canary incident** session starts. The issue list then shows `Incident: canary rolled back
-on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table, links, the
-   timeline and the impact ("20% of /api and /mcp ... from <live> to <rolled back>"). It also
-   shows `Regression: gateway canary rejected at <sha> on main`, labelled `priority::high`,
-   `type::regression` and `app::gateway`, which links the incident and gives a first
-   investigation step.
-4. Re-running the flow for the same pipeline creates nothing new (it searches first).
-   A drill never reaches the healer (`force_bad` true → `done`).
+   The automatic `canary` job injects a 50% error rate into the canary. (The manual
+   `canary:bad-release` job on main also works: it is `allow_failure`, so the pipeline stays
+   green, but `duo:incident:bad-release` still dispatches its incident.)
+2. When the job finishes (it builds a whole cluster, so allow several minutes), its log ends with
+   `CANARY VERDICT: ROLLBACK -> ROLLBACK, rolled-back`, the `CANARY_VERDICT_JSON: {...}` line, and
+   `ERROR: RELEASE REJECTED: canary rolled back`. The job and the pipeline are **failed**.
+3. `duo:incident` runs and logs `created incident #N: assigned user 43587207`. The issue
+   `Incident: canary rolled back <sha> (pipeline <id>)` is labelled `incident`,
+   `priority::high` and `status::ready`, marked as a drill, and has the summary, the
+   stable-vs-canary table, the reasons, links, and the record block after
+   `CANARY_VERDICT_JSON:`. It is assigned to `ai-canary-incident-gitlab-ai-hackathon`.
+4. The **Canary incident** session starts on that assignment. It posts `## Incident triage
+(Duo)` on the issue (verdict, what the job log confirms, the commits since the stable
+   baseline, impact) and opens `Regression: gateway canary rejected at <sha> on main`
+   (`priority::high`, `type::regression`, `app::gateway`), and the label becomes
+   `status::triaged`.
+5. Retrying `duo:incident` only re-assigns the same issue, and re-assigning a triaged incident
+   does nothing new. A drill never reaches the healer (`force_bad` true → `done`), so there is
+   no fix MR. Part (c) shows the full loop with a real regression.
+6. No session? Assign the issue to `ai-canary-incident-gitlab-ai-hackathon` by hand (see
+   "Honest limits": bot-made assignments may not fire triggers).
 
 **(c) Self-healing release.** This is the full loop with a realistic regression.
 [scripts/demo/README.md](../scripts/demo/README.md) has the commands.
@@ -186,15 +206,17 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
    a 4 KB cap on pages of paginated tools. Push it, open an MR, and merge it. Its unit tests
    pass.
 2. main's canary seeds today's orders and decides **ROLLBACK** with
-   `canary woo__list_orders success 0.0%`. The pipeline fails, and the incident and regression
-   issue appear.
+   `canary woo__list_orders success 0.0%`. The pipeline fails. `duo:incident` opens the
+   incident issue and assigns it to the incident bot. The flow posts the triage note and opens
+   the regression issue.
 3. The healer opens **`Autoheal: ... (incident #N)`** from `autoheal/<pipeline id>`, which
    reverts the hunk in `apps/gateway/src/core/{limits,call-tool}.ts`. Notes on both issues link
    it.
 4. The MR's `canary` runs with no click and decides **PROMOTE**. `autoheal:report` (failing on
    purpose) carries `AUTOHEAL_VERDICT_JSON`.
-5. Approve the MR. The **Autoheal postmortem** session posts the postmortem on the incident,
-   adds `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR.
+5. Approve the MR, then comment `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>` on it.
+   The **Autoheal postmortem** session posts the postmortem on the incident, adds
+   `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR.
 6. Merge the MR. main's canary promotes it.
 
 ## Honest limits
@@ -202,8 +224,14 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
 - The flows need Duo Agent Platform, custom flows turned on, and GitLab Credits. They are
   registered by hand in the UI: the repo copy is the source, and the UI copy can drift. Re-paste
   after changes.
-- Triggers fire only on actions that a person started. Pushes, merges, "Run pipeline" and
-  clicking a manual job all count. Scheduled pipelines and bot activity don't.
+- Triggers are only Mention, Assign and Assign reviewer, and the goal is only an iid (ADR 007).
+  CI makes the assignments with a project access token. Whether GitLab starts a flow for an
+  assignment made by a bot user is **not verified yet**. If no session starts, assign or mention
+  the account by hand; the flows work the same way.
+- The risk gate runs once per MR, when its account first becomes a reviewer. Later pushes are
+  still classified in CI (`risk:classify`, `release:human-approval`).
+- `DUO_DISPATCH_TOKEN` is not protected, because MR pipelines need it. Keep it Developer-only,
+  `api` scope and short-lived.
 - A high-risk main pipeline shows **blocked** until someone runs `release:human-approval`. That
   is the gate working. Low-risk main pipelines don't create the job. See ADR 004.
 - A drill always fails its job, even when it worked. Read `DECISION` or the log.
@@ -223,6 +251,7 @@ on main (<sha>)`, marked as a drill, with the reasons, a stable-vs-canary table,
 - The canary baseline comes from the job-token artifacts API (the latest successful default-branch
   `canary`). Without it, stable is this commit, as before, and a real regression reads as HOLD.
   Today's orders are dated at seeding, so a run that crosses midnight IST sees fewer of them.
-- The flows have been checked by `flows.test.sh` (schema rules, tool names, routes) but not
-  executed on GitLab from this repo. Agent behaviour (exact answers, tool parameters such as
+- The flows have been checked by `flows.test.sh` (schema rules, tool names, routes). Only the
+  old risk-gate prompt has run on GitLab (session 9814505, which showed goal = `"31"`); the
+  rewritten flows have not run yet. Agent behaviour (exact answers, tool parameters such as
   incident type or add-labels) is resolved at run time, and the prompts include fallbacks.

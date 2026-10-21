@@ -2,7 +2,8 @@
 
 Status: proposed (needs Aadi: new flow to register, CI semantics change for autoheal MRs and for
 the canary baseline) · Issue #28 · Scope G4 option B · Amends ADR 003 (stable baseline, seeded
-orders) and ADR 004 (incident flow gains a healer step)
+orders) and ADR 004 (incident flow gains a healer step) · Amended by ADR 007 (#27: the postmortem
+starts on a mention of its account, not on MR approval)
 
 ## Context
 
