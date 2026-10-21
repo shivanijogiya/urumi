@@ -202,7 +202,11 @@ if [ -f "$I" ]; then
     '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
      | contains("autoheal/<pipeline id>") and contains("Autoheal: <one-line root cause> (incident #<incident iid>)")
        and contains("\"autoheal\"") and contains("Incident: #<incident iid>")
-       and contains("@ai-canary-postmortem-gitlab-ai-hackathon")'
+       and contains("ai-canary-postmortem-gitlab-ai-hackathon")'
+  # #33: CI mentions the postmortem account; a mention in the healer's MR text would start the
+  # flow early (before the canary), so the healer names the account without "@".
+  check "incident: healer never @-mentions the postmortem account" "$I" \
+    '[.prompts[].prompt_template.system | contains("@ai-canary-postmortem")] | all(. == false)'
 fi
 if [ -f "$P" ]; then
   check "postmortem: one writer component, no gate; writer ends the flow" "$P" \

@@ -124,4 +124,5 @@ autoheal MR (supervised autonomy).
 - Both jobs use the `.duo-dispatch` template and the same token, and both are `allow_failure`.
 - **Consequences.** A bot mention may not start a flow (see "Bot as actor is unverified" above).
   The fallback is the same mention by hand. `duo:release-close` also acts on
-  PROMOTE_PENDING_APPROVAL, before `release:human-approval` is run on main.
+  PROMOTE_PENDING_APPROVAL, but only after `release:human-approval` ran on main (optional
+  `needs`; low-risk pipelines have no such job).

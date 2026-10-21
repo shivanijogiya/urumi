@@ -240,8 +240,9 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
   the account by hand; the flows work the same way.
 - The postmortem mention is posted by the same bot user (#33). If GitLab does not start a flow
   on a bot's mention, mention the account by hand. `duo:release-close` (#34) closes the incident
-  on main's PROMOTE or PROMOTE_PENDING_APPROVAL. It needs only `canary`, so with a high-risk fix
-  it closes before `release:human-approval` is run.
+  on main's PROMOTE or PROMOTE_PENDING_APPROVAL. With a high-risk fix it waits for
+  `release:human-approval` (an optional `needs`), so the incident closes only after a person
+  approves the release.
 - The risk gate runs once per MR, when its account first becomes a reviewer. Later pushes are
   still classified in CI (`risk:classify`, `release:human-approval`).
 - `DUO_DISPATCH_TOKEN` is not protected, because MR pipelines need it. Keep it Developer-only,

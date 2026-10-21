@@ -93,6 +93,10 @@ duo:release-close:
   needs:
     - job: canary
       artifacts: true
+    # A high-risk release (PROMOTE_PENDING_APPROVAL) is released only after a person runs
+    # release:human-approval; wait for it. Low-risk pipelines have no such job (optional).
+    - job: release:human-approval
+      optional: true
   rules:
     - if: $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: on_success

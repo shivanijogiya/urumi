@@ -135,8 +135,8 @@ check "duo:postmortem: runs dispatch.py postmortem for this MR on verdict.json" 
 check "duo:release-close: one rule, default branch only (never MR), when on_success" "$D" \
   '.["duo:release-close"].rules as $r | ($r | length) == 1 and ($r[0].if | main_only_if)
    and $r[0].when == "on_success"'
-check "duo:release-close: needs canary with artifacts, in canary's stage" "$D" \
-  '.["duo:release-close"] | .needs == [{"job": "canary", "artifacts": true}] and .stage == "deploy"'
+check "duo:release-close: needs canary with artifacts (and human approval if any), in canary's stage" "$D" \
+  '.["duo:release-close"] | .needs == [{"job": "canary", "artifacts": true}, {"job": "release:human-approval", "optional": true}] and .stage == "deploy"'
 check "duo:release-close: runs dispatch.py release-close on verdict.json" "$D" \
   '.["duo:release-close"].script == ["python3 scripts/duo/dispatch.py release-close --record verdict.json"]'
 
