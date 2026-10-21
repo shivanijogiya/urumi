@@ -1,6 +1,7 @@
 # build: app images (MR: build only; protected main/tags: push) + chart package.
 # secure: Secret Detection, SAST, IaC, and Container Scanning of the pushed images.
 # release: Helm chart push, after the scans. Release jobs: .gitlab/ci/release.gitlab-ci.yml.
+# Duo flows are started by assigning their service accounts: .gitlab/ci/duo-dispatch.gitlab-ci.yml.
 stages:
   - lint
   - test
@@ -15,6 +16,7 @@ include:
   - template: Jobs/SAST-IaC.gitlab-ci.yml
   - local: .gitlab/ci/release.gitlab-ci.yml
   - local: .gitlab/ci/canary.gitlab-ci.yml
+  - local: .gitlab/ci/duo-dispatch.gitlab-ci.yml
 
 # Run on merge requests, the default branch, tags, and any branch push. A branch
 # push with an open MR is skipped so the MR pipeline is the only one.

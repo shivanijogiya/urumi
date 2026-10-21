@@ -205,4 +205,5 @@ release:config-tests:
     - bash .gitlab/ci/tests/chart-package.test.sh
     - bash .gitlab/ci/tests/release-config.test.sh
     - bash .gitlab/ci/tests/autoheal-ci.test.sh
+    - bash .gitlab/ci/tests/duo-dispatch.test.sh
     - bash .gitlab/flows/tests/flows.test.sh

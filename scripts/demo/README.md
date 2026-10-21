@@ -2,8 +2,9 @@
 
 The whole loop, end to end: a bad merge, canary ROLLBACK, an incident, an autoheal MR, an automatic
 canary PROMOTE, a human approval, the postmortem, and the merge. Design: [ADR 005](../../docs/adr/005-self-healing.md).
-Flows must be registered first (docs/HACKATHON.md, "Register the flows"), including **Autoheal
-postmortem** with trigger **Merge request → Approved**.
+Flows must be registered and enabled first, and the CI variable `DUO_DISPATCH_TOKEN` must be set
+(docs/HACKATHON.md, "Register the flows"; [ADR 007](../../docs/adr/007-duo-dispatch.md)). CI
+assigns the incident to the incident bot; the postmortem starts when a person mentions its bot.
 
 ## 0. Check the regression offline (optional, 2 min)
 
@@ -28,8 +29,7 @@ cd .hermes/demo-faster-tool-results && glab mr create --source-branch demo/faste
 ```
 
 The MR pipeline is green: `test` passes, and the change is in `apps/gateway/src/core/`, which is
-low risk. Its canary is manual, so leave it. **Merge** the MR. The merge is the human action
-that fires the triggers.
+low risk. Its canary is manual, so leave it. **Merge** the MR. The merge starts main's pipeline.
 
 ## 2. Canary ROLLBACK → incident (automatic, ~15 min)
 
@@ -38,8 +38,10 @@ that fires the triggers.
 - Log: `stable gateway = <old> (last-promoted), canary = <new>`, then
   `CANARY VERDICT: ROLLBACK`, reason `canary woo__list_orders success 0.0% vs minimum 95.0%`,
   then `RELEASE REJECTED: canary rolled back`. The pipeline **fails**.
-- The **Canary incident** session opens `Incident: canary rolled back on main (<sha>)` and
-  `Regression: gateway canary rejected at <sha> on main`. It answers `healable`.
+- `duo:incident` opens `Incident: canary rolled back <sha> (pipeline <id>)` with the canary
+  record and assigns it to `ai-canary-incident-gitlab-ai-hackathon`. The **Canary incident**
+  session posts `## Incident triage (Duo)` on it, opens
+  `Regression: gateway canary rejected at <sha> on main`, and answers `healable`.
 
 ## 3. Healer → autoheal MR (automatic, same session)
 
@@ -62,8 +64,9 @@ that fires the triggers.
 
 ## 5. Approve (a person) → postmortem (automatic)
 
-- **Approve** the autoheal MR. The **Autoheal postmortem** session reads the verdict line for the
-  MR's head pipeline. On PROMOTE it:
+- **Approve** the autoheal MR, then comment `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>`
+  on it. The **Autoheal postmortem** session reads the verdict line for the MR's head pipeline.
+  On PROMOTE it:
   - posts `## Postmortem (autoheal)` on the incident (impact, detection minutes, time to fix,
     root cause, fix, what limited impact, action items);
   - adds the label `status::mitigated`;
