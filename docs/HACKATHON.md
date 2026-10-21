@@ -1,13 +1,15 @@
 # Hackathon story: from commit to canary verdict, risk gate and incident
 
-Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing), #27 (H4, Duo dispatch). ADRs:
+Issues #22 (H1), #23 (H2), #24 (H3), #28 (self-healing), #27 (H4, Duo dispatch), #33 and #34
+(closing the loop in CI). ADRs:
 [003 canary](adr/003-canary.md), [004 Duo flows](adr/004-duo-flows.md),
 [005 self-healing](adr/005-self-healing.md), [007 Duo dispatch](adr/007-duo-dispatch.md).
 
 **How the flows start.** GitLab gives each custom flow one trigger: **Mention**, **Assign** or
 **Assign reviewer** of the flow's service account, and the flow's goal is just the iid of that
-MR or issue. CI makes those assignments (`scripts/duo/dispatch.py`), so no one has to click,
-except for the postmortem, which is a deliberate mention by a person.
+MR or issue. CI makes those assignments and mentions (`scripts/duo/dispatch.py`), so no one has
+to click. The only human action in the self-healing loop is reviewing and merging the fix MR
+(supervised autonomy).
 
 ## The story in one pipeline
 
@@ -39,12 +41,15 @@ except for the postmortem, which is a deliberate mention by a person.
    hunk against the verdict, and opens MR **`Autoheal: <root cause> (incident #N)`** (label
    `autoheal`) with the smallest fix (a targeted hunk revert). If it is unsure, or the suspect
    touched CI, charts or secrets, it comments "needs human" instead.
-9. **Verify, approve, postmortem.** The autoheal MR's `canary` runs **automatically**: stable is
-   the last promoted commit and the canary is the fix. A person approves, then mentions
-   `@ai-canary-postmortem-gitlab-ai-hackathon` on the MR. The Duo **postmortem** flow reads the
-   verdict that `autoheal:report` writes into the MR description. On PROMOTE it posts a blameless postmortem on
-   the incident, labels it `status::mitigated`, and notes "verified by canary, ready to merge".
-   A person merges.
+9. **Verify, postmortem.** The autoheal MR's `canary` runs **automatically**: stable is the last
+   promoted commit and the canary is the fix. `autoheal:report` writes the verdict into the MR
+   description. On PROMOTE, `duo:postmortem` posts one note on the MR that mentions
+   `@ai-canary-postmortem-gitlab-ai-hackathon` (#33). The Duo **postmortem** flow reads the
+   verdict block, posts a blameless postmortem on the incident, labels it `status::mitigated`,
+   and notes "verified by canary, ready to merge".
+10. **Merge, release, close.** A person reviews and merges the MR: this is the only human step.
+    main's `canary` checks the merged fix. On PROMOTE, `duo:release-close` (#34) closes the
+    incident (note, `status::resolved`) and its open regression issue.
 
 The canary compares this commit with the **last promoted** one (stable is built from it) and
 probes a store with **24 of today's orders**. Before #28 both tracks ran the same commit on an
@@ -67,11 +72,11 @@ flowchart LR
   AM --> AC{canary, automatic<br/>autoheal/ rule}
   AC --> AR[autoheal:report<br/>verdict block in MR description]
   AC -->|ROLLBACK| AF[MR pipeline failed]
-  AR --> H2([person approves,<br/>mentions postmortem bot])
-  H2 -->|Mention| PM[[postmortem flow]]
-  PM -->|PROMOTE| PMN[postmortem on incident<br/>status::mitigated<br/>MR: ready to merge]
-  PM -->|not PROMOTE| NV[note: not verified]
-  PMN --> H3([person merges]) --> M
+  AR -->|PROMOTE: duo:postmortem mentions| PM[[postmortem flow]]
+  PM -->|verified| PMN[postmortem on incident<br/>status::mitigated<br/>MR: ready to merge]
+  PM -->|not verified| NV[note: not verified]
+  PMN --> H3([person reviews + merges]) --> M
+  P -->|duo:release-close| CL[incident + regression closed<br/>status::resolved]
 ```
 
 ```mermaid
@@ -140,7 +145,7 @@ flows**. You need the Maintainer role in the project.
    | ------------------- | ----------------------------------------------------- | --------------- | ---------------------------------- |
    | Release risk gate   | `ai-release-risk-gate-gitlab-ai-hackathon` (43587203) | Assign reviewer | `duo:risk-gate`, every MR pipeline |
    | Canary incident     | `ai-canary-incident-gitlab-ai-hackathon` (43587207)   | Assign          | `duo:incident` after a ROLLBACK    |
-   | Autoheal postmortem | `ai-canary-postmortem-gitlab-ai-hackathon` (43587198) | Mention         | a person, on the approved MR       |
+   | Autoheal postmortem | `ai-canary-postmortem-gitlab-ai-hackathon` (43587198) | Mention         | `duo:postmortem` after a PROMOTE   |
 
    If the ids differ after re-creating a flow, update `RISK_GATE_USER_ID` / `INCIDENT_USER_ID`
    in `scripts/duo/dispatch.py`.
@@ -153,8 +158,8 @@ skipping Duo dispatch` and pass. ADR 007 has the trade-offs.
 4. **Project settings for the gate.** **Settings > Merge requests > Merge checks > Pipelines
    must succeed**, so a blocked high-risk MR pipeline can't be merged. Optional: create the
    labels `priority::high`, `type::regression`, `app::gateway`, `incident`, `status::ready`,
-   `status::triaged`, `risk::high`, `risk::low`, `gate::infra`, `autoheal` and
-   `status::mitigated` in **Manage > Labels** to pick colours. GitLab creates missing labels on
+   `status::triaged`, `risk::high`, `risk::low`, `gate::infra`, `autoheal`, `status::mitigated`
+   and `status::resolved` in **Manage > Labels** to pick colours. GitLab creates missing labels on
    use anyway.
 
 ## Demo script
@@ -214,10 +219,15 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
    it.
 4. The MR's `canary` runs with no click and decides **PROMOTE**. `autoheal:report` (failing on
    purpose) writes `AUTOHEAL_VERDICT_JSON` into the MR description, in the "Canary verdict" block.
-5. Approve the MR, then comment `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>` on it.
-   The **Autoheal postmortem** session posts the postmortem on the incident, adds
-   `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR.
-6. Merge the MR. main's canary promotes it.
+5. `duo:postmortem` posts one note on the MR (once per pipeline) that starts
+   `@ai-canary-postmortem-gitlab-ai-hackathon !<mr iid>: the canary verified this fix`. The
+   **Autoheal postmortem** session posts the postmortem on the incident, adds
+   `status::mitigated`, and notes "Verified by canary ..., ready to merge" on the MR. No session?
+   Post the same mention by hand.
+6. Review and merge the MR (the only human step). main's canary promotes it, and
+   `duo:release-close` logs `release-close: closed incident #N` and
+   `release-close: closed regression #M`. Both issues are closed, and the incident is labelled
+   `status::resolved`.
 
 ## Honest limits
 
@@ -228,6 +238,10 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
   CI makes the assignments with a project access token. Whether GitLab starts a flow for an
   assignment made by a bot user is **not verified yet**. If no session starts, assign or mention
   the account by hand; the flows work the same way.
+- The postmortem mention is posted by the same bot user (#33). If GitLab does not start a flow
+  on a bot's mention, mention the account by hand. `duo:release-close` (#34) closes the incident
+  on main's PROMOTE or PROMOTE_PENDING_APPROVAL. It needs only `canary`, so with a high-risk fix
+  it closes before `release:human-approval` is run.
 - The risk gate runs once per MR, when its account first becomes a reviewer. Later pushes are
   still classified in CI (`risk:classify`, `release:human-approval`).
 - `DUO_DISPATCH_TOKEN` is not protected, because MR pipelines need it. Keep it Developer-only,
@@ -243,8 +257,8 @@ high-risk change (...)`, and `approval.json` is attached. Only then does the pip
   Use a protected environment with approval rules (Premium) for strict separation of duties.
 - Self-healing (#28) is bounded on purpose. The healer only restores lines from before one
   suspect commit, in at most 3 files, never in CI, charts, `scripts/canary/**` or secrets.
-  Anything else gets "needs human". It can be wrong: the autoheal canary and the human approval
-  are the checks, and nothing merges without a person.
+  Anything else gets "needs human". It can be wrong: the autoheal canary and the person who
+  reviews and merges are the checks, and nothing merges without a person.
 - `autoheal:report` always fails (allowed to fail) on autoheal MRs. Duo flows cannot read job
   logs in this project (#32), so the job writes the verdict into the MR description, and its
   failing status shows the postmortem that the pipeline reached the report (ADR 005, amendment).

@@ -59,7 +59,7 @@ dispatch` and exits 0. Every dispatch job is `allow_failure`, so dispatch never 
   no-op). The healer is unchanged in its limits (at most 3 files, never CI, charts, secrets or
   `.gitlab/**`, "needs human" when unsure). It reads the incident from the same issue and
   compares against the stable baseline instead of the push's `before_sha`.
-- **The postmortem stays a deliberate human step.** After approving an autoheal MR, a person
+- **The postmortem stays a deliberate human step** (replaced by the #33 update below). After approving an autoheal MR, a person
   mentions `@ai-canary-postmortem-gitlab-ai-hackathon` on it. The flow extracts the MR iid (or
   says that none was given), and verification and postmortem logic are as in ADR 005. CI never
   dispatches it.
@@ -96,3 +96,32 @@ dispatch` and exits 0. Every dispatch job is `allow_failure`, so dispatch never 
   automatically.
 - The incident record lives in the issue description. Anyone who can edit the issue can change
   it, so the flows treat it as untrusted data, check types, and use only the documented fields.
+
+## Update (#33, #34): CI closes the loop
+
+The postmortem is no longer a human mention, and the incident no longer waits for a person to
+close it. The only human action left in the self-healing loop is reviewing and merging the
+autoheal MR (supervised autonomy).
+
+- **`duo:postmortem` (#33)** runs on autoheal MR pipelines after `autoheal:report` has written
+  the verdict block. That job always fails on purpose, so this one runs `when: always` and
+  `dispatch.py postmortem` decides from `verdict.json`. On PROMOTE or PROMOTE_PENDING_APPROVAL,
+  for an open MR labelled `autoheal` from `autoheal/<digits>`, it posts one note that mentions
+  `@ai-canary-postmortem-gitlab-ai-hackathon`. The note ends with the plain line
+  `postmortem-dispatch: pipeline <id>` (no HTML comment, which Duo strips), and a second run for
+  the same pipeline does nothing. The flow runs before the merge. It no longer stops on "not
+  approved": the project requires 0 approvals and the MR author cannot approve, so the merge is
+  the human gate. Its checks (verdict block, head pipeline, failing jobs) are unchanged, and the
+  mention proves nothing to it.
+- **`duo:release-close` (#34)** runs on default-branch pipelines after `canary` passed.
+  `dispatch.py release-close` finds the merged `autoheal` MRs of `CI_COMMIT_SHA`. For each one,
+  it takes the incident from the description's `Incident: #<iid>` line, or from the title's
+  `(incident #<iid>)`. If that issue is an open canary incident, it posts a note with the
+  `release-close: pipeline <id>` marker, closes it, adds `status::resolved`, and removes
+  `status::mitigated`, `status::triaged` and `status::ready`. It then closes the open
+  `type::regression` issues titled `Regression: gateway canary rejected at <incident sha>`. A
+  closed incident is not touched again.
+- Both jobs use the `.duo-dispatch` template and the same token, and both are `allow_failure`.
+- **Consequences.** A bot mention may not start a flow (see "Bot as actor is unverified" above).
+  The fallback is the same mention by hand. `duo:release-close` also acts on
+  PROMOTE_PENDING_APPROVAL, before `release:human-approval` is run on main.
