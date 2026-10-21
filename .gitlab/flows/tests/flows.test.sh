@@ -7,7 +7,11 @@
 #   params.stop, no response schemas), every toolset entry in tool-names.txt (the Duo tools
 #   registry names this project uses), every router target a component or end/abort, entry_point
 #   a component. Also: the risk-gate prompt and release:human-approval's MR rules:changes state
-#   exactly the globs of scripts/canary/risk.py.
+#   exactly the globs of scripts/canary/risk.py. Self-healing (#28): the incident flow reaches the
+#   healer only on the fixed word `healable`, the healer's toolset and hard rules, the postmortem
+#   flow has no merge/commit tool and reads autoheal:report's AUTOHEAL_VERDICT_JSON line, and
+#   (when the offline copy .hermes/ref/tools_registry.py exists) every name in tool-names.txt is a
+#   tool class of the Duo tools registry.
 # Run: bash .gitlab/flows/tests/flows.test.sh   (needs helm, jq, python3)
 set -u
 
@@ -53,7 +57,7 @@ def agents: [.components[] | select(.type == "AgentComponent")];
 '
 
 FLOW_FILES=("$FLOWS"/*.yaml)
-[ "${#FLOW_FILES[@]}" -ge 2 ] && ok "found ${#FLOW_FILES[@]} flow files" || bad "found flow files" "${FLOW_FILES[*]}"
+[ "${#FLOW_FILES[@]}" -ge 3 ] && ok "found ${#FLOW_FILES[@]} flow files" || bad "found flow files" "${FLOW_FILES[*]}"
 
 for f in "${FLOW_FILES[@]}"; do
   n="$(basename "$f")"
@@ -117,6 +121,7 @@ done
 # --- Specific flows -------------------------------------------------------------
 I="$TMP/incident.yaml.json"
 R="$TMP/risk-gate.yaml.json"
+P="$TMP/postmortem.yaml.json"
 if [ -f "$I" ]; then
   check "incident: triage has no tools; skip ends, anything else reaches the reporter" "$I" \
     '(.components[] | select(.name == "triage") | .toolset) == []
@@ -130,6 +135,49 @@ if [ -f "$I" ]; then
      | contains("\"canary:bad-release\"") and contains("CANARY_VERDICT_JSON: ")
        and contains("priority::high") and contains("type::regression") and contains("app::gateway")
        and contains("Incident: canary rolled back on <ref> (<short sha>)")'
+  check "incident: reporter reaches the healer only on the word healable; anything else ends" "$I" \
+    '(.routers[] | select(.from == "incident_reporter") | .condition.routes)
+       == {"healable": "healer", "default_route": "end"}
+     and ([.routers[] | select(.from == "healer") | .to] == ["end"])'
+  check "incident: reporter answers healable only for a new, non-drill, default-branch incident" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_report") | .prompt_template.system
+     | contains("\"healable\"") and contains("\"done\"") and contains("force_bad")
+       and contains("default branch")'
+  check "incident: triage and reporter skip autoheal/ pipelines (no healing loop)" "$I" \
+    '[.prompts[] | select(.prompt_id == "incident_triage" or .prompt_id == "incident_report")
+      | .prompt_template.system | contains("autoheal/")] == [true, true]'
+  check "incident: healer has exactly the read, branch, commit, MR and note tools" "$I" \
+    '(.components[] | select(.name == "healer") | .toolset | sort)
+     == (["list_commits","get_commit","get_commit_diff","get_repository_file","create_branch",
+          "create_commit","create_merge_request","create_issue_note","issue_search","get_issue"] | sort)'
+  check "incident: healer prompt forbids CI config, charts, secrets, .gitlab/** and > 3 files" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
+     | contains(".gitlab-ci.yml") and contains(".gitlab/**") and contains("charts/**")
+       and contains("scripts/canary/**") and contains("secret") and contains("at most 3 files")
+       and contains("only files changed by the suspect commit")'
+  check "incident: healer falls back to needs human and never merges" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
+     | contains("needs human") and contains("Never merge") and contains("untrusted data")'
+  check "incident: healer names the branch, MR title and label" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
+     | contains("autoheal/<pipeline id>") and contains("Autoheal: <one-line root cause> (incident #<incident iid>)")
+       and contains("\"autoheal\"") and contains("Incident: #<incident iid>")'
+fi
+if [ -f "$P" ]; then
+  check "postmortem: gate answer skip ends; anything else reaches the writer" "$P" \
+    '(.components[] | select(.name == "gate") | .toolset) == []
+     and (.routers[] | select(.from == "gate") | .condition.routes)
+         == {"skip": "end", "default_route": "postmortem_writer"}
+     and ([.routers[] | select(.from == "postmortem_writer") | .to] == ["end"])'
+  check "postmortem: no merge, approve, branch or commit tool" "$P" \
+    '[tool_names[] | select(test("merge") and . != "get_merge_request" and . != "create_merge_request_note")]
+       == []
+     and ([tool_names[] | select(test("create_commit|create_branch|approve|accept|update_merge_request"))] == [])'
+  check "postmortem: reads the autoheal:report line, checks PROMOTE, labels status::mitigated" "$P" \
+    '[.prompts[].prompt_template.system] | join("\n")
+     | contains("autoheal:report") and contains("AUTOHEAL_VERDICT_JSON: ") and contains("PROMOTE_PENDING_APPROVAL")
+       and contains("status::mitigated") and contains("\"autoheal\"") and contains("Never merge")
+       and contains("blameless")'
 fi
 if [ -f "$R" ]; then
   check "risk-gate: classifier answer low ends; anything else pauses for Human Input (fail closed)" "$R" \
@@ -140,6 +188,21 @@ if [ -f "$R" ]; then
     '[.prompts[].prompt_template.system] | join("\n")
      | contains("release:human-approval") and contains("risk::high") and contains("gate::infra")
        and contains("risk::low")'
+fi
+
+# --- tool-names.txt vs the Duo tools registry (offline copy; git-ignored, so skipped in CI) ---
+REG="$ROOT/.hermes/ref/tools_registry.py"
+if [ -f "$REG" ]; then
+  missing="$(python3 - "$FLOWS/tool-names.txt" "$REG" <<'PY'
+import re, sys
+names = [n.strip() for n in open(sys.argv[1]) if n.strip()]
+reg = open(sys.argv[2]).read()
+classes = set(re.findall(r"\b(?:tools\.)?([A-Z][A-Za-z]+)\b", reg))
+print(" ".join(n for n in names if "".join(p.capitalize() for p in n.split("_")) not in classes))
+PY
+)"
+  [ -z "$missing" ] && ok "every tool-names.txt entry is a Duo tools registry class" \
+    || bad "every tool-names.txt entry is a Duo tools registry class" "$missing"
 fi
 
 # --- Same rules everywhere: risk.py == risk-gate prompt == CI rules:changes ------
