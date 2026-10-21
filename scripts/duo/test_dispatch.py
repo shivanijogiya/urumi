@@ -243,6 +243,28 @@ class Incident(unittest.TestCase):
         self.assertEqual(json.loads(block), RECORD)
         self.assertEqual(d.count("```"), 2)
 
+    def test_description_states_what_the_canary_job_did_without_its_log(self):
+        # #32: the incident flow cannot read job logs; the issue is its evidence of the rollback.
+        rec = {**RECORD, "action": "rolled-back",
+               "samples": {"total": 150, "stable": 120, "canary": 30, "unknown": 0, "unattributed_errors": 0}}
+        _, _, _, reqs = run(["incident", "--record", self.record(rec)],
+                            self.routes([], {"iid": 12, "assignees": []}))
+        d = reqs[1]["body"]["description"]
+        self.assertIn(
+            "**CI canary record** (job canary, https://gitlab.example/g/showcase/-/jobs/99, pipeline "
+            "4242): verdict ROLLBACK, decision ROLLBACK, action rolled-back; samples 150 (stable 120, "
+            "canary 30, unknown 0, unattributed errors 0).",
+            d,
+        )
+        # Fields absent from an older record read n/a; no job URL still names the job.
+        rec = {**RECORD, "ci": {**RECORD["ci"], "job_url": None}}
+        _, _, _, reqs = run(["incident", "--record", self.record(rec)],
+                            self.routes([], {"iid": 12, "assignees": []}))
+        d = reqs[1]["body"]["description"]
+        self.assertIn("**CI canary record** (job canary, no job URL, pipeline 4242): verdict ROLLBACK, "
+                      "decision ROLLBACK, action n/a; samples n/a (stable n/a, canary n/a, unknown n/a, "
+                      "unattributed errors n/a).", d)
+
     def test_drill_is_marked(self):
         _, _, _, reqs = run(["incident", "--record", self.record({**RECORD, "force_bad": True})],
                             self.routes([], {"iid": 12, "assignees": []}))

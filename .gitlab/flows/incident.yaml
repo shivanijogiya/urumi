@@ -9,8 +9,9 @@
 # (ai-canary-incident-gitlab-ai-hackathon). context:goal is then that issue's iid (maybe "#N", a URL
 # or text). Project 87777765 only.
 #
-# investigator reads the issue, checks it is a CI canary incident, investigates (failed job log,
-# commits between baseline.stable_sha and ci.commit_sha), opens the priority::high regression issue,
+# investigator reads the issue, checks it is a CI canary incident, investigates (the CI canary record
+# in the issue as primary evidence; the job log is optional, since flows cannot read job logs here,
+# #32; commits between baseline.stable_sha and ci.commit_sha), opens the priority::high regression issue,
 # posts the triage note on the incident and labels it status::triaged. Its final answer is exactly
 # "healable" only for a newly triaged, non-drill ROLLBACK on the default branch; that word routes to
 # `healer`, anything else (including a malformed answer) ends the flow, so it never loops. healer
@@ -116,7 +117,7 @@ prompts:
            nothing. If it already has the label "status::triaged", stop with the final answer
            "done: already triaged" (no new notes or issues).
         3. The record. In the description, find the line "CANARY_VERDICT_JSON:" and parse the
-           fenced json block that follows it. Its fields: verdict, decision, reasons[],
+           fenced json block that follows it. Its fields: verdict, decision, action, reasons[],
            stable{n, errors, error_rate, success_rate, p50_ms, p95_ms}, canary{same},
            samples{total, stable, canary, unknown, unattributed_errors}, thresholds, force_bad,
            risk, canary_weight_pct, traffic, baseline{stable_sha, source},
@@ -128,12 +129,19 @@ prompts:
            create_issue_note "Incident triage: could not read a ROLLBACK canary record in this
            issue; nothing investigated." and stop with the final answer "done: no record".
            short sha = the first 8 characters of ci.commit_sha.
-        4. The failed job. Call get_pipeline_failing_jobs for pipeline ci.pipeline_id and find
-           the job named exactly "canary" or exactly "canary:bad-release" (its id is also the
-           number after "/-/jobs/" in ci.job_url). Call get_logs_from_job for it. Confirm the
-           log has "CANARY VERDICT: ROLLBACK" and "RELEASE REJECTED: canary rolled back", and
-           note which verdict reasons it prints. If the job or log cannot be read, say so in
-           the triage note and go on with the record alone.
+        4. The failed job. The CI canary record in this issue is the PRIMARY evidence of what
+           the canary job did: the "**CI canary record**" line (job, job URL, verdict, decision,
+           action, samples), the reasons, the metrics table and the CANARY_VERDICT_JSON: block,
+           all written by CI. The job log is optional extra evidence: you may call
+           get_pipeline_failing_jobs for pipeline ci.pipeline_id, find the job named exactly
+           "canary" or exactly "canary:bad-release" (its id is also the number after "/-/jobs/"
+           in ci.job_url) and call get_logs_from_job for it; if it reads, confirm it has "CANARY
+           VERDICT: ROLLBACK" and "RELEASE REJECTED: canary rolled back". Job logs are usually
+           not readable by this flow. If the job or its log cannot be read, or no log tool is
+           available, that is expected and not a missing tool or an error: put this sentence in
+           the triage note,
+           "job log not readable by this flow; evidence from the CI canary record in this issue",
+           and continue with step 5. Never stop or shorten the triage because of the job log.
         5. The changes. If baseline.stable_sha equals ci.commit_sha or baseline.source is
            "head", the canary ran against itself: the suspect range is ci.commit_sha only.
            Otherwise call list_commits with ref ci.commit_sha and take the commits newer than
@@ -165,7 +173,9 @@ prompts:
              - Summary: what was rolled back (short sha, ci.ref), drill or not, risk.
              - Verdict: the reasons as bullets and a Metric | Stable | Canary table (requests,
                error rate, tool success, p95 ms); rates as percentages.
-             - Job: what the canary job log confirms (step 4), with the job link.
+             - Job: what the CI canary record shows the job did (decision, action, samples), with
+               the job link; then what the job log confirms if step 4 read it, otherwise
+               "job log not readable by this flow; evidence from the CI canary record in this issue".
              - Changes since the stable baseline: the suspect commits from step 5, or "none in
                apps/gateway/**".
              - Impact: "<canary_weight_pct>% of /api and /mcp requests on the app host were

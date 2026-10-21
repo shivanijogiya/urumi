@@ -9,7 +9,9 @@
 #   a component. Also: the risk-gate prompt and release:human-approval's MR rules:changes state
 #   exactly the globs of scripts/canary/risk.py. Self-healing (#28): the incident flow reaches the
 #   healer only on the fixed word `healable`, the healer's toolset and hard rules, the postmortem
-#   flow has no merge/commit tool and reads autoheal:report's AUTOHEAL_VERDICT_JSON line, and
+#   flow has no merge/commit tool and reads autoheal:report's AUTOHEAL_VERDICT_JSON line from the
+#   MR description block, pinned to head_pipeline (#32: flows cannot read job logs here; the log is
+#   only a fallback, and for the incident flow the job log is optional), and
 #   (when the offline copy .hermes/ref/tools_registry.py exists) every name in tool-names.txt is a
 #   tool class of the Duo tools registry. Dispatch (#27): every agent reads only context:goal (an
 #   MR or issue iid), every prompt names project 87777765 and says how to extract the iid and to
@@ -157,6 +159,13 @@ if [ -f "$I" ]; then
        and contains("CANARY_VERDICT_JSON:") and contains("fenced json block")
        and contains("baseline.stable_sha") and contains("ci.commit_sha")
        and contains("status::triaged") and contains("\"canary:bad-release\"")'
+  # #32: the canary record in the issue is the primary evidence; the job log is optional.
+  check "incident: the job log is optional; an unreadable log does not stop the triage" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_investigate") | .prompt_template.system
+     | contains("job log is optional")
+       and contains("job log not readable by this flow; evidence from the CI canary record in this issue")
+       and contains("PRIMARY evidence") and contains("CI canary record")
+       and test("not a missing tool"; "i") and contains("continue")'
   check "incident: prompt names the regression labels and title" "$I" \
     '[.prompts[].prompt_template.system] | join("\n")
      | contains("priority::high") and contains("type::regression") and contains("app::gateway")
@@ -203,6 +212,20 @@ if [ -f "$P" ]; then
      | contains("autoheal:report") and contains("AUTOHEAL_VERDICT_JSON: ") and contains("PROMOTE_PENDING_APPROVAL")
        and contains("status::mitigated") and contains("\"autoheal\"") and contains("Never merge")
        and contains("blameless")'
+  # #32: flows cannot read job logs here; autoheal:report writes the verdict into the MR description.
+  check "postmortem: reads the verdict block from the MR description, pinned to head_pipeline" "$P" \
+    '.prompts[] | select(.prompt_id == "postmortem_write") | .prompt_template.system
+     | contains("<!-- autoheal-verdict:start -->") and contains("<!-- autoheal-verdict:end -->")
+       and contains("autoheal-verdict:start") and contains("head_pipeline") and contains("ci.pipeline_id")
+       and contains("get_merge_request") and contains("exactly \"autoheal:report\"")
+       and contains("exactly \"canary\"")'
+  check "postmortem: the job log is only a fallback; no block and no log is NOT VERIFIED" "$P" \
+    '.prompts[] | select(.prompt_id == "postmortem_write") | .prompt_template.system
+     | contains("get_logs_from_job") and test("OPTIONAL fallback|optional fallback")
+       and contains("verdict block missing from the MR description")'
+  check "postmortem: get_logs_from_job stays in the toolset (fallback)" "$P" \
+    '[tool_names[] | select(. == "get_logs_from_job" or . == "get_merge_request" or . == "get_pipeline_failing_jobs")]
+     | sort == ["get_logs_from_job","get_merge_request","get_pipeline_failing_jobs"]'
   check "postmortem: a missing iid is reported with how to mention the account" "$P" \
     '.prompts[0].prompt_template.system
      | contains("No merge request iid in the goal") and contains("@ai-canary-postmortem-gitlab-ai-hackathon")'
