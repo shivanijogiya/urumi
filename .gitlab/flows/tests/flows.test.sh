@@ -11,7 +11,10 @@
 #   healer only on the fixed word `healable`, the healer's toolset and hard rules, the postmortem
 #   flow has no merge/commit tool and reads autoheal:report's AUTOHEAL_VERDICT_JSON line, and
 #   (when the offline copy .hermes/ref/tools_registry.py exists) every name in tool-names.txt is a
-#   tool class of the Duo tools registry.
+#   tool class of the Duo tools registry. Dispatch (#27): every agent reads only context:goal (an
+#   MR or issue iid), every prompt names project 87777765 and says how to extract the iid and to
+#   stop when there is none, no prompt expects a webhook payload, and the incident flow reads the
+#   CANARY_VERDICT_JSON: block that scripts/duo/dispatch.py writes into the incident issue.
 # Run: bash .gitlab/flows/tests/flows.test.sh   (needs helm, jq, python3)
 set -u
 
@@ -120,6 +123,20 @@ for f in "${FLOW_FILES[@]}"; do
      | all(.message_template and (.sends_response_to as $t | $c | index($t) != null))'
   check "$n: every agent prompt treats input as untrusted data" "$j" \
     '[.prompts[].prompt_template.system] | all(test("untrusted data"))'
+  # #27: flows are started by Assign / Assign reviewer / Mention; context:goal is just an iid.
+  check "$n: every prompt names project 87777765 and its path" "$j" \
+    '[.prompts[].prompt_template.system]
+     | all(contains("87777765") and contains("gitlab-ai-hackathon/transcend-october-2026/36848717/showcase"))'
+  check "$n: no prompt mentions a webhook payload" "$j" \
+    '[.prompts[].prompt_template | .system, .user] | all(test("webhook payload"; "i") | not)'
+  check "$n: every agent reads context:goal and otherwise only other components' outputs" "$j" \
+    'component_names as $c | agents
+     | all([(.inputs // [])[] | if type == "object" then .from else . end] as $in
+       | ($in | index("context:goal") != null)
+         and ($in | all(. == "context:goal" or (ltrimstr("context:") | split(".")[0] as $x | $c | index($x) != null))))'
+  check "$n: every prompt extracts the FIRST iid from the goal and stops when there is none" "$j" \
+    '[.prompts[].prompt_template.system]
+     | all(contains("FIRST") and contains("iid") and contains("If the goal contains no iid"))'
 done
 
 # --- Specific flows -------------------------------------------------------------
@@ -127,28 +144,33 @@ I="$TMP/incident.yaml.json"
 R="$TMP/risk-gate.yaml.json"
 P="$TMP/postmortem.yaml.json"
 if [ -f "$I" ]; then
-  check "incident: triage has no tools; skip ends, anything else reaches the reporter" "$I" \
-    '(.components[] | select(.name == "triage") | .toolset) == []
-     and (.routers[] | select(.from == "triage") | .condition.routes)
-         == {"skip": "end", "default_route": "incident_reporter"}'
-  check "incident: reporter reads logs, searches first, can create issues" "$I" \
-    '(.components[] | select(.name == "incident_reporter") | .toolset) as $t
-     | (["get_pipeline_failing_jobs","get_logs_from_job","issue_search","create_issue"] - $t) == []'
-  check "incident: prompt names both canary jobs, the log marker and the labels" "$I" \
+  check "incident: no payload triage; entry point is the investigator" "$I" \
+    '.flow.entry_point == "investigator" and ([.components[].name] | sort) == ["healer", "investigator"]'
+  check "incident: investigator reads the issue, the job log and commits; creates issues and notes" "$I" \
+    '(.components[] | select(.name == "investigator") | .toolset) as $t
+     | (["get_issue","get_pipeline_failing_jobs","get_logs_from_job","list_commits","get_commit_diff",
+         "issue_search","create_issue","create_issue_note","update_issue"] - $t) == []
+       and ($t | index("create_merge_request") == null) and ($t | index("create_commit") == null)'
+  check "incident: investigator verifies the CI incident issue and reads its record block" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_investigate") | .prompt_template.system
+     | contains("\"incident\"") and contains("Incident: canary rolled back")
+       and contains("CANARY_VERDICT_JSON:") and contains("fenced json block")
+       and contains("baseline.stable_sha") and contains("ci.commit_sha")
+       and contains("status::triaged") and contains("\"canary:bad-release\"")'
+  check "incident: prompt names the regression labels and title" "$I" \
     '[.prompts[].prompt_template.system] | join("\n")
-     | contains("\"canary:bad-release\"") and contains("CANARY_VERDICT_JSON: ")
-       and contains("priority::high") and contains("type::regression") and contains("app::gateway")
-       and contains("Incident: canary rolled back on <ref> (<short sha>)")'
-  check "incident: reporter reaches the healer only on the word healable; anything else ends" "$I" \
-    '(.routers[] | select(.from == "incident_reporter") | .condition.routes)
+     | contains("priority::high") and contains("type::regression") and contains("app::gateway")
+       and contains("Regression: gateway canary rejected at <short sha> on <ci.ref>")'
+  check "incident: investigator reaches the healer only on the word healable; anything else ends" "$I" \
+    '(.routers[] | select(.from == "investigator") | .condition.routes)
        == {"healable": "healer", "default_route": "end"}
      and ([.routers[] | select(.from == "healer") | .to] == ["end"])'
-  check "incident: reporter answers healable only for a new, non-drill, default-branch incident" "$I" \
-    '.prompts[] | select(.prompt_id == "incident_report") | .prompt_template.system
+  check "incident: investigator answers healable only for a new, non-drill, default-branch incident" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_investigate") | .prompt_template.system
      | contains("\"healable\"") and contains("\"done\"") and contains("force_bad")
-       and contains("default branch")'
-  check "incident: triage and reporter skip autoheal/ pipelines (no healing loop)" "$I" \
-    '[.prompts[] | select(.prompt_id == "incident_triage" or .prompt_id == "incident_report")
+       and contains("default branch") and contains("in this run")'
+  check "incident: investigator and healer never heal autoheal/ refs (no healing loop)" "$I" \
+    '[.prompts[] | select(.prompt_id == "incident_investigate" or .prompt_id == "incident_heal")
       | .prompt_template.system | contains("autoheal/")] == [true, true]'
   check "incident: healer has exactly the read, branch, commit, MR and note tools" "$I" \
     '(.components[] | select(.name == "healer") | .toolset | sort)
@@ -162,17 +184,16 @@ if [ -f "$I" ]; then
   check "incident: healer falls back to needs human and never merges" "$I" \
     '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
      | contains("needs human") and contains("Never merge") and contains("untrusted data")'
-  check "incident: healer names the branch, MR title and label" "$I" \
+  check "incident: healer names the branch, MR title, label and the postmortem mention" "$I" \
     '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
      | contains("autoheal/<pipeline id>") and contains("Autoheal: <one-line root cause> (incident #<incident iid>)")
-       and contains("\"autoheal\"") and contains("Incident: #<incident iid>")'
+       and contains("\"autoheal\"") and contains("Incident: #<incident iid>")
+       and contains("@ai-canary-postmortem-gitlab-ai-hackathon")'
 fi
 if [ -f "$P" ]; then
-  check "postmortem: gate answer skip ends; anything else reaches the writer" "$P" \
-    '(.components[] | select(.name == "gate") | .toolset) == []
-     and (.routers[] | select(.from == "gate") | .condition.routes)
-         == {"skip": "end", "default_route": "postmortem_writer"}
-     and ([.routers[] | select(.from == "postmortem_writer") | .to] == ["end"])'
+  check "postmortem: one writer component, no gate; writer ends the flow" "$P" \
+    '[.components[].name] == ["postmortem_writer"] and .flow.entry_point == "postmortem_writer"
+     and .routers == [{"from": "postmortem_writer", "to": "end"}]'
   check "postmortem: no merge, approve, branch or commit tool" "$P" \
     '[tool_names[] | select(test("merge") and . != "get_merge_request" and . != "create_merge_request_note")]
        == []
@@ -182,16 +203,24 @@ if [ -f "$P" ]; then
      | contains("autoheal:report") and contains("AUTOHEAL_VERDICT_JSON: ") and contains("PROMOTE_PENDING_APPROVAL")
        and contains("status::mitigated") and contains("\"autoheal\"") and contains("Never merge")
        and contains("blameless")'
+  check "postmortem: a missing iid is reported with how to mention the account" "$P" \
+    '.prompts[0].prompt_template.system
+     | contains("No merge request iid in the goal") and contains("@ai-canary-postmortem-gitlab-ai-hackathon")'
 fi
 if [ -f "$R" ]; then
-  check "risk-gate: classifier answer low ends; anything else pauses for Human Input (fail closed)" "$R" \
+  check "risk-gate: low or no_merge_request ends; anything else pauses for Human Input (fail closed)" "$R" \
     '(.routers[] | select(.from == "risk_classifier") | .condition.routes)
-       == {"low": "end", "default_route": "human_review"}
+       == {"low": "end", "no_merge_request": "end", "default_route": "human_review"}
      and ([.components[] | select(.name == "human_review") | .type] == ["HumanInputComponent"])'
   check "risk-gate: note names release:human-approval and the labels" "$R" \
     '[.prompts[].prompt_template.system] | join("\n")
      | contains("release:human-approval") and contains("risk::high") and contains("gate::infra")
        and contains("risk::low")'
+  check "risk-gate: classifier reads the MR and its diffs in project 87777765" "$R" \
+    '(.components[] | select(.name == "risk_classifier") | .toolset) as $t
+     | (["get_merge_request","list_merge_request_diffs","create_merge_request_note","update_merge_request"] - $t) == []
+     and (.prompts[] | select(.prompt_id == "risk_classify") | .prompt_template.system
+          | contains("get_merge_request with project id 87777765"))'
 fi
 
 # --- tool-names.txt vs the Duo tools registry (offline copy; git-ignored, so skipped in CI) ---
