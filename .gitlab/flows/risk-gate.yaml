@@ -23,7 +23,6 @@ components:
       - 'list_merge_request_diffs'
       - 'create_merge_request_note'
       - 'update_merge_request'
-    max_cycles: 25
     ui_log_events:
       - 'on_agent_final_answer'
       - 'on_tool_execution_success'
@@ -32,7 +31,6 @@ components:
   - name: 'human_review'
     type: HumanInputComponent
     sends_response_to: 'approval_recorder'
-    interaction_type: 'approval'
     message_template: |
       High-risk merge request. Risk gate result: {{ classification }}
       Approve to record a reviewer sign-off on the MR, or reject to record that it needs changes.
@@ -51,7 +49,6 @@ components:
         as: 'decision'
     toolset:
       - 'create_merge_request_note'
-    max_cycles: 5
     ui_log_events:
       - 'on_agent_final_answer'
       - 'on_tool_execution_success'

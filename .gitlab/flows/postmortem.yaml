@@ -21,7 +21,6 @@ components:
       - from: 'context:goal'
         as: 'merge_request_event'
     toolset: []
-    max_cycles: 3
     ui_log_events:
       - 'on_agent_final_answer'
 
@@ -40,7 +39,6 @@ components:
       - 'create_issue_note'
       - 'update_issue'
       - 'create_merge_request_note'
-    max_cycles: 30
     ui_log_events:
       - 'on_agent_final_answer'
       - 'on_tool_execution_success'

@@ -67,6 +67,10 @@ for f in "${FLOW_FILES[@]}"; do
   check "$n: environment is ambient" "$j" '.environment == "ambient"'
   check "$n: no forbidden top-level keys (name, description, product_group)" "$j" \
     '[keys[] | select(. == "name" or . == "description" or . == "product_group")] == []'
+  # GitLab's custom-flow schema rejects component keys the internal flow registry accepts
+  # (UI: "max_cycles is a disallowed additional property"), so allow-list what GitLab accepted.
+  check "$n: components use only keys GitLab's custom-flow schema accepts" "$j" \
+    '[.components[] | keys[] | select(IN("name","type","prompt_id","prompt_version","inputs","toolset","ui_log_events","tool_name","sends_response_to","message_template") | not)] == []'
   check "$n: only known top-level keys" "$j" \
     '(keys - ["version","environment","components","routers","flow","prompts"]) == []'
   check "$n: components, routers, flow and prompts present" "$j" \
