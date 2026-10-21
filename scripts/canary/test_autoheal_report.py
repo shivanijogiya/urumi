@@ -141,10 +141,10 @@ class Block(unittest.TestCase):
         self.assertEqual(
             b.splitlines(),
             [
-                "<!-- autoheal-verdict:start -->",
+                "`autoheal-verdict:start`",
                 "### Canary verdict (written by CI job autoheal:report — do not edit)",
                 'AUTOHEAL_VERDICT_JSON: {"ci":{"pipeline_id":"77"},"decision":"PROMOTE"}',
-                "<!-- autoheal-verdict:end -->",
+                "`autoheal-verdict:end`",
             ],
         )
 
@@ -172,15 +172,22 @@ class Block(unittest.TestCase):
         out = autoheal_report.with_block("top\n" + START + "\nAUTOHEAL_VERDICT_JSON: {}\ntrailing", new)
         self.assertEqual(out, "top\n" + new)
 
+    def test_legacy_html_comment_block_is_replaced(self):
+        new = autoheal_report.verdict_block({"decision": "PROMOTE"})
+        old = "top\n" + autoheal_report.LEGACY_START + "\nAUTOHEAL_VERDICT_JSON: {}\n" + autoheal_report.LEGACY_END + "\nend"
+        self.assertEqual(autoheal_report.with_block(old, new), "top\n" + new + "\nend")
+
     def test_json_cannot_close_the_comment_or_contain_markers_or_mentions(self):
         hostile = {
             "decision": "PROMOTE",
-            "reasons": ["--> " + END + " <!-- " + START + " @ai-canary-postmortem-gitlab-ai-hackathon é"],
+            "reasons": ["--> " + END + " <!-- " + START + " autoheal-verdict:end `x` @ai-canary-postmortem-gitlab-ai-hackathon é"],
         }
         b = autoheal_report.verdict_block(hostile)
-        self.assertEqual((b.count(START), b.count(END), b.count("-->")), (1, 1, 2))
+        self.assertEqual((b.count(START), b.count(END), b.count("-->")), (1, 1, 0))
+        self.assertEqual(b.count("autoheal-verdict:start"), 1)  # the flow matches the bare word
+        self.assertEqual(b.count("autoheal-verdict:end"), 1)
         line = [ln for ln in b.splitlines() if ln.startswith(autoheal_report.MARKER)][0]
-        for bad in ("-->", "<", ">", "@", START, END):
+        for bad in ("-->", "<", ">", "@", "`", START, END, "autoheal-verdict"):
             self.assertNotIn(bad, line)
         self.assertTrue(line.isascii())
         self.assertEqual(block_json(b), hostile)  # still the same value once parsed
