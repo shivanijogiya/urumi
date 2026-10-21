@@ -1,8 +1,12 @@
 # verdict.py's report + what scripts/canary/ci.sh did with it (#24). Every input is a string --arg;
 # empty CI fields become null (outside GitLab CI). Output: the verdict.json artifact, also printed
-# as the `CANARY_VERDICT_JSON:` log line that .gitlab/flows/incident.yaml reads.
+# as the `CANARY_VERDICT_JSON:` log line that .gitlab/flows/incident.yaml reads. AI shoppers (#29):
+# `shoppers` (verdict.py --shoppers: status, per-track success, rollback) and `customer_voice` (the
+# most common canary shopper blocker, sanitized model output) are always present, null without.
 def v: if . == "" then null else . end;
 . + {
+  shoppers: (.shoppers // null),
+  customer_voice: (.customer_voice // null),
   decision: $decision,
   action: $action,
   tag: $tag,

@@ -55,6 +55,13 @@ class AutohealReport(unittest.TestCase):
         self.assertEqual(s["ci"]["pipeline_id"], "77")
         self.assertNotIn("thresholds", s)
 
+    def test_keeps_the_shopper_fields_for_the_postmortem(self):
+        shoppers = {"status": "used", "stable": {"valid": 4, "completed": 4}, "rollback": False}
+        _, lines = run({**self.VERDICT, "shoppers": shoppers, "customer_voice": "It was fine."})
+        s = marker_json(lines)
+        self.assertEqual(s["shoppers"], shoppers)
+        self.assertEqual(s["customer_voice"], "It was fine.")
+
     def test_missing_or_bad_verdict_is_decision_none(self):
         for bad in (None, "not json", {"verdict": "PROMOTE"}, [1]):
             code, lines = run(bad)

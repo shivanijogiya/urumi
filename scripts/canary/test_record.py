@@ -74,6 +74,26 @@ class RecordJq(unittest.TestCase):
         r = record(self.report)
         self.assertEqual(r["baseline"], {"stable_sha": "0123abcd", "source": "last-promoted"})
 
+    def test_shopper_fields_are_null_without_shoppers(self):
+        r = record(self.report)
+        self.assertIsNone(r["shoppers"])
+        self.assertIsNone(r["customer_voice"])
+
+    def test_keeps_the_customer_voice_for_the_flows(self):
+        good = verdict.report(
+            verdict.load_samples(os.path.join(HERE, "testdata", "good.json")), verdict.Thresholds())
+        voice = "I couldn't see today's orders; the store showed an error."
+        tracks = {
+            "stable": {"valid": 4, "completed": 4, "invalid": 0, "blockers": []},
+            "canary": {"valid": 4, "completed": 1, "invalid": 0, "blockers": [voice]},
+        }
+        report = verdict.apply_shoppers(good, {"tracks": tracks}, verdict.ShopperThresholds())
+        r = record(report)
+        self.assertEqual(r["verdict"], "ROLLBACK")
+        self.assertEqual(r["customer_voice"], voice)
+        self.assertEqual(r["shoppers"]["status"], "used")
+        self.assertIn(voice, r["reasons"][0])
+
     def test_force_bad_is_false_unless_1(self):
         self.assertIs(record(self.report, force_bad="0")["force_bad"], False)
 

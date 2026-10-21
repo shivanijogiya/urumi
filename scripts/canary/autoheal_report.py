@@ -37,6 +37,8 @@ KEEP = (
     "baseline",
     "timeline",
     "ci",
+    "shoppers",  # AI shoppers (#29): status and per-track success
+    "customer_voice",  # sanitized shopper blocker on the canary, or null
 )
 
 
