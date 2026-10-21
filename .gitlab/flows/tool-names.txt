@@ -12,3 +12,10 @@ submit_merge_request_risk_classification
 get_repository_file
 get_project
 issue_search
+list_commits
+get_commit
+get_commit_diff
+create_branch
+create_commit
+create_merge_request
+get_issue
