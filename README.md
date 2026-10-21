@@ -9,6 +9,52 @@ file, on a VPS.
 Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 · Requirement IDs (K1…D8): [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) · ADRs: [`docs/adr/`](docs/adr/)
 
+## GitLab Transcend hackathon: a release pipeline that heals itself
+
+**Problem.** Teams automate shipping, but a bad release is still handled by hand: someone notices,
+rolls back, digs through commits, writes a fix, checks it and writes the postmortem. That is hours
+of on-call work, and a regression that keeps HTTP 200s (wrong results, not errors) is often missed.
+
+**What this project does.** Everything after the code is written runs as agents on GitLab CI and
+the **GitLab Duo Agent Platform** (three custom flows in [`.gitlab/flows/`](.gitlab/flows/)):
+
+```mermaid
+flowchart LR
+  MR([merge request]) --> T[tests + Secret Detection, SAST, IaC, container scans]
+  T --> RG[[Duo flow: risk gate<br/>labels risk, blocks high-risk MRs]]
+  RG --> H1([person merges])
+  H1 --> C{canary 20% vs<br/>last promoted}
+  C -->|PROMOTE| OK[released]
+  C -->|ROLLBACK| RB[automatic rollback<br/>+ incident issue]
+  RB --> INC[[Duo flow: incident<br/>root cause, regression issue,<br/>writes the fix MR]]
+  INC --> V{canary on the fix}
+  V -->|PROMOTE| PM[[Duo flow: postmortem<br/>blameless postmortem,<br/>incident mitigated]]
+  PM --> H2([person reviews + merges])
+  H2 --> CL[main canary PROMOTE:<br/>incident + regression closed by CI]
+```
+
+**Autonomy level: Supervised.** Agents run every step on their own: scanning, risk
+classification, canary verdict, rollback, investigation, the fix, its verification and the
+postmortem. A person approves only the outcome: the merge. Agents have no merge or approve tool,
+and high-risk changes (auth, keys, CI, charts, secrets) wait for a human.
+
+**It ran for real** (all of it is in this project's history):
+
+| Step                                                                                   | Evidence                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A "perf" change caps tool results at 4 KB and breaks `woo__list_orders`                | [!33](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/33)                                                                                                     |
+| The canary sees tool success fall to 0 % while HTTP errors stay at 0 %, and rolls back | [pipelines](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/pipelines)                                                                                                       |
+| CI opens the incident; Duo triages it and opens the regression issue                   | [#30](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/work_items/30), [#31](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/work_items/31) |
+| Duo writes the fix MR; its canary returns PROMOTE                                      | [!34](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/34)                                                                                                     |
+| Duo verifies the verdict and posts the blameless postmortem                            | [#30](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/work_items/30)                                                                                                         |
+| A person merges; main's canary PROMOTEs; the incident is closed                        | [#30](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/work_items/30)                                                                                                         |
+
+Details: [`docs/HACKATHON.md`](docs/HACKATHON.md) · ADRs [003 canary](docs/adr/003-canary.md),
+[004 Duo flows](docs/adr/004-duo-flows.md), [005 self-healing](docs/adr/005-self-healing.md),
+[007 Duo dispatch](docs/adr/007-duo-dispatch.md).
+
+## The application being released
+
 ## Architecture
 
 ```mermaid
