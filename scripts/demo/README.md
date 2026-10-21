@@ -38,8 +38,20 @@ that fires the triggers.
 - Log: `stable gateway = <old> (last-promoted), canary = <new>`, then
   `CANARY VERDICT: ROLLBACK`, reason `canary woo__list_orders success 0.0% vs minimum 95.0%`,
   then `RELEASE REJECTED: canary rolled back`. The pipeline **fails**.
+- With the CI variable `ANTHROPIC_API_KEY` set, the AI shoppers (#29, ADR 006) shop on both tracks
+  during the verdict. On the canary, the two personas that read today's orders hit the 4 KB cap
+  ("Tool result too large"), so the reasons also carry a second line like
+  `AI shoppers: 2/4 journeys completed on canary vs 4/4 on stable — "I couldn't see today's
+orders; the store showed an error."`, and the block ends with
+  `AI shoppers: used, customer voice: "..."`. The wording is the model's and changes from run to
+  run. `shoppers.json` (job artifact) shows each journey's tools and errors. Without the key the
+  line says `AI shoppers: skipped` and the ROLLBACK comes from the probe alone. A shopper that
+  works around the cap (by asking for a smaller page) completes, and then the shopper line can be
+  missing even with the key.
 - The **Canary incident** session opens `Incident: canary rolled back on main (<sha>)` and
-  `Regression: gateway canary rejected at <sha> on main`. It answers `healable`.
+  `Regression: gateway canary rejected at <sha> on main`, with a
+  `> Customer voice (AI shopper on the canary): "..."` line when the shoppers ran. It answers
+  `healable`.
 
 ## 3. Healer → autoheal MR (automatic, same session)
 
@@ -64,8 +76,9 @@ that fires the triggers.
 
 - **Approve** the autoheal MR. The **Autoheal postmortem** session reads the verdict line for the
   MR's head pipeline. On PROMOTE it:
-  - posts `## Postmortem (autoheal)` on the incident (impact, detection minutes, time to fix,
-    root cause, fix, what limited impact, action items);
+  - posts `## Postmortem (autoheal)` on the incident (impact, detection minutes, the customer
+    voice if the incident has one, time to fix, root cause, fix, what limited impact, action
+    items);
   - adds the label `status::mitigated`;
   - notes on the MR: "Verified by canary (PROMOTE, pipeline N), ready to merge ...".
 - If the canary did not PROMOTE, it notes "fix not verified" on the MR and the incident instead.
