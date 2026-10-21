@@ -33,6 +33,8 @@ ARGS = {
     "job_url": "",
     "sha": "abc1234def",
     "ref": "main",
+    "base_sha": "0123abcd",
+    "base_src": "last-promoted",
 }
 
 
@@ -67,6 +69,10 @@ class RecordJq(unittest.TestCase):
         self.assertIsNone(r["ci"]["job_url"])
         self.assertIsNone(r["risk"])
         self.assertEqual(record(self.report, risk="high")["risk"], "high")
+
+    def test_records_the_stable_baseline(self):
+        r = record(self.report)
+        self.assertEqual(r["baseline"], {"stable_sha": "0123abcd", "source": "last-promoted"})
 
     def test_force_bad_is_false_unless_1(self):
         self.assertIs(record(self.report, force_bad="0")["force_bad"], False)

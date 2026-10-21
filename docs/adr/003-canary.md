@@ -2,7 +2,8 @@
 
 Status: proposed (needs Aadi's G3 approval: new workload, IngressRoute, NetworkPolicy and values
 changes) · Issue #23 · Requirement H2 · Amended by ADR 004 (#24): a ROLLBACK now fails the job,
-and a high-risk PROMOTE waits for `release:human-approval`
+and a high-risk PROMOTE waits for `release:human-approval`; amended by ADR 005 (#28): stable is
+built from the last promoted commit and the store is seeded with today's orders
 
 ## Context
 
