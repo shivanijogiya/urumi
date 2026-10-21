@@ -117,13 +117,15 @@ canary:bad-release:
 # .gitlab/flows/postmortem.yaml; docs/adr/005-self-healing.md). Duo flows cannot read job logs in
 # this project (#32), but they can read the MR description. scripts/canary/autoheal_report.py
 # prints verdict.json as one `AUTOHEAL_VERDICT_JSON: {...}` line and writes the same line into the
-# MR description between `<!-- autoheal-verdict:start -->` and `<!-- autoheal-verdict:end -->`
+# MR description between the visible lines `autoheal-verdict:start` and `autoheal-verdict:end`
 # (replaced on reruns), which the flow reads with get_merge_request. It then exits 1 on purpose:
 # get_pipeline_failing_jobs lists the job, which proves the pipeline reached the report, and
 # allow_failure keeps the pipeline green. It runs even when the canary failed (when: always), and
-# then reports that verdict, or decision NONE. Token: CI/CD variable DUO_DISPATCH_TOKEN (masked, as
-# in .gitlab/ci/duo-dispatch.gitlab-ci.yml), read from the environment only, never echoed or
-# passed as an argument. Unset or an API error: one line in the log, the description is unchanged.
+# then reports that verdict, or decision NONE. Afterwards `duo:postmortem` (#33) mentions the
+# postmortem flow's account on the MR when the verdict is a PROMOTE. Token: CI/CD variable
+# DUO_DISPATCH_TOKEN (masked, as in .gitlab/ci/duo-dispatch.gitlab-ci.yml), read from the
+# environment only, never echoed or passed as an argument. Unset or an API error: one line in the
+# log, the description is unchanged.
 autoheal:report:
   stage: deploy
   image: python:3.12-alpine

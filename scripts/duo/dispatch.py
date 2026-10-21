@@ -16,11 +16,25 @@ reviewer of the flow's service account. A flow then gets `context:goal` = the ii
       samples, job URL). If an open issue for the same
       pipeline exists, it only assigns that one. No record or not a ROLLBACK: nothing to do.
       Job duo:incident, default branch.
+  dispatch.py postmortem <mr_iid> --record verdict.json
+      After an autoheal MR's canary PROMOTEs (or PROMOTE_PENDING_APPROVAL), and before a person
+      merges (#33): on an open MR labelled `autoheal` from autoheal/<digits>, posts one note that
+      mentions the postmortem account (its trigger is Mention). The note ends with the plain line
+      `postmortem-dispatch: pipeline <id>`; when an MR note already has it, nothing to do. Job
+      duo:postmortem, autoheal MR pipelines, after autoheal:report wrote the verdict block.
+  dispatch.py release-close --record verdict.json
+      After main's canary PROMOTEs (#34): for each merged `autoheal` MR of CI_COMMIT_SHA, closes
+      its incident ("Incident: #<iid>" on the description's first line, else "(incident #<iid>)"
+      at the end of the title) with a note, label status::resolved and the status::mitigated /
+      triaged / ready labels removed, then closes the open type::regression issues titled
+      "Regression: gateway canary rejected at <the incident's short sha>". A closed incident is
+      not touched again. Job duo:release-close, default branch.
 
 Env: DUO_DISPATCH_TOKEN (project access token, api scope, Developer; sent as PRIVATE-TOKEN and never
-printed), CI_API_V4_URL, CI_PROJECT_ID, optional CI_PROJECT_URL and CI_PIPELINE_ID. Without the
-token it prints one line and exits 0. Every HTTP call has a 15 s timeout. Exit 0 = done or nothing
-to do, 1 = API or config error, 2 = bad arguments.
+printed), CI_API_V4_URL, CI_PROJECT_ID, optional CI_PROJECT_URL, CI_PIPELINE_ID, CI_PIPELINE_URL,
+CI_COMMIT_SHA and CI_DEFAULT_BRANCH (the record's ci fields are the fallback). Without the token it
+prints one line and exits 0. Every HTTP call has a 15 s timeout. Exit 0 = done or nothing to do,
+1 = API or config error, 2 = bad arguments.
 """
 
 from __future__ import annotations
@@ -36,12 +50,22 @@ import urllib.request
 
 RISK_GATE_USER_ID = 43587203  # ai-release-risk-gate-gitlab-ai-hackathon
 INCIDENT_USER_ID = 43587207  # ai-canary-incident-gitlab-ai-hackathon
+POSTMORTEM_ACCOUNT = "ai-canary-postmortem-gitlab-ai-hackathon"  # user 43587198, trigger Mention
 TIMEOUT_S = 15
 MARKER = "CANARY_VERDICT_JSON:"
 TITLE_PREFIX = "Incident: canary rolled back"
+REGRESSION_PREFIX = "Regression: gateway canary rejected at"
 INCIDENT_LABELS = "incident,priority::high,status::ready"
+RESOLVED_LABEL = "status::resolved"
+OPEN_STATUS_LABELS = "status::mitigated,status::triaged,status::ready"
+VERIFIED = ("PROMOTE", "PROMOTE_PENDING_APPROVAL")
 SKIP_NO_TOKEN = "DUO_DISPATCH_TOKEN not set; skipping Duo dispatch"
 _IID = re.compile(r"^[1-9][0-9]{0,18}$")
+_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+_AUTOHEAL_BRANCH = re.compile(r"^autoheal/[0-9]+$")
+_DESC_INCIDENT = re.compile(r"^Incident: #([1-9][0-9]{0,18})$")
+_TITLE_INCIDENT = re.compile(r"\(incident #([1-9][0-9]{0,18})\)$")
+_INCIDENT_SHA = re.compile(r"^" + TITLE_PREFIX + r" ([0-9a-f]{7,40}) \(pipeline [0-9]+\)$")
 
 
 class DispatchError(Exception):
@@ -273,6 +297,143 @@ def incident(api: Api, record_path: str, env: dict) -> str:
     return "created " + assign(api, created)
 
 
+# --- postmortem and release-close (#33, #34) -----------------------------------------------------
+
+
+def verified_record(record_path: str, what: str) -> tuple[dict | None, str]:
+    """(record, "") when the canary verified the release, else (None, why there is nothing to do)."""
+    record = load_record(record_path)
+    if record is None:
+        return None, f"{what}: no readable canary record at {record_path}; nothing to do"
+    decision = record.get("decision")
+    if decision not in VERIFIED:
+        return None, f"{what}: canary decision is {_text(decision, 40)}, not PROMOTE; nothing to do"
+    return record, ""
+
+
+def pipeline_of(record: dict, env: dict) -> int:
+    return positive_int(env.get("CI_PIPELINE_ID") or _obj(record, "ci").get("pipeline_id"), "pipeline id")
+
+
+def labels_of(item: dict) -> list:
+    return item.get("labels") if isinstance(item.get("labels"), list) else []
+
+
+def has_marker(api: Api, notes_path: str, marker: str) -> bool:
+    """True when one of the newest 100 notes has `marker` as a whole line."""
+    notes = api.call("GET", notes_path, query={"sort": "desc", "per_page": 100})
+    for note in notes if isinstance(notes, list) else []:
+        body = note.get("body") if isinstance(note, dict) else None
+        if isinstance(body, str) and marker in (line.strip() for line in body.splitlines()):
+            return True
+    return False
+
+
+def postmortem(api: Api, mr_iid: int, record_path: str, env: dict) -> str:
+    record, nothing = verified_record(record_path, "postmortem")
+    if record is None:
+        return nothing
+    pipeline_id, decision = pipeline_of(record, env), record["decision"]
+    mr = api.call("GET", f"/merge_requests/{mr_iid}")
+    mr = mr if isinstance(mr, dict) else {}
+    branch = mr.get("source_branch")
+    if not (mr.get("state") == "opened" and "autoheal" in labels_of(mr)
+            and isinstance(branch, str) and _AUTOHEAL_BRANCH.match(branch)):
+        return f"postmortem: !{mr_iid} is not an open autoheal merge request; nothing to do"
+    marker = f"postmortem-dispatch: pipeline {pipeline_id}"
+    if has_marker(api, f"/merge_requests/{mr_iid}/notes", marker):
+        return f"postmortem: !{mr_iid} already dispatched for pipeline {pipeline_id}; nothing to do"
+    # A plain marker line, no HTML comment: Duo strips HTML comments from tool output (#32).
+    body = (
+        f"@{POSTMORTEM_ACCOUNT} !{mr_iid}: the canary verified this fix ({decision}, pipeline "
+        f"{pipeline_id}). Check the verdict block and write the postmortem on the incident.\n\n{marker}"
+    )
+    api.call("POST", f"/merge_requests/{mr_iid}/notes", {"body": body})
+    return f"postmortem: mentioned the postmortem account on !{mr_iid} ({decision}, pipeline {pipeline_id})"
+
+
+def incident_iid(mr: dict) -> int | None:
+    """The incident iid from the MR description's first line, else from the end of its title."""
+    desc = mr.get("description") if isinstance(mr.get("description"), str) else ""
+    title = mr.get("title") if isinstance(mr.get("title"), str) else ""
+    m = _DESC_INCIDENT.match(desc.strip().splitlines()[0].strip() if desc.strip() else "")
+    m = m or _TITLE_INCIDENT.search(title.strip())
+    return int(m.group(1)) if m else None
+
+
+def is_regression_of(issue: object, sha: str) -> bool:
+    title = issue.get("title") if isinstance(issue, dict) else None
+    prefix = f"{REGRESSION_PREFIX} {sha}"
+    return (isinstance(title, str) and title.startswith(prefix) and title[len(prefix):][:1] in ("", " ")
+            and isinstance(issue.get("iid"), int) and not isinstance(issue.get("iid"), bool)
+            and issue["iid"] > 0)
+
+
+def release_close(api: Api, record_path: str, env: dict):
+    """Yields one line per action."""
+    record, nothing = verified_record(record_path, "release-close")
+    if record is None:
+        yield nothing
+        return
+    ci = _obj(record, "ci")
+    pipeline_id, decision = pipeline_of(record, env), record["decision"]
+    sha = str(env.get("CI_COMMIT_SHA") or ci.get("commit_sha") or "").strip()
+    if not _SHA.match(sha):
+        raise DispatchError(f"commit sha must be 7 to 40 hex digits, got {sha[:40]!r}")
+    url = env.get("CI_PIPELINE_URL") or ci.get("pipeline_url")
+    released = (
+        f"{_text(env.get('CI_DEFAULT_BRANCH') or 'main', 60)} pipeline {pipeline_id} canary {decision} "
+        f"({_text(url) if url else 'no pipeline URL'})"
+    )
+    mrs = api.call("GET", f"/repository/commits/{sha}/merge_requests")
+    mrs = [m for m in mrs if isinstance(m, dict)] if isinstance(mrs, list) else []
+    fixes = [m for m in mrs if m.get("state") == "merged" and "autoheal" in labels_of(m)]
+    if not fixes:
+        yield f"release-close: no merged autoheal merge request in {sha[:8]}; nothing to do"
+        return
+    marker = f"release-close: pipeline {pipeline_id}"
+    for mr in fixes:
+        mr_iid = positive_int(mr.get("iid"), "merge request iid")
+        iid = incident_iid(mr)
+        if iid is None:
+            yield f"release-close: !{mr_iid} names no incident; skipped"
+            continue
+        issue = api.call("GET", f"/issues/{iid}")
+        issue = issue if isinstance(issue, dict) else {}
+        title = issue.get("title") if isinstance(issue.get("title"), str) else ""
+        if "incident" not in labels_of(issue) or not title.startswith(TITLE_PREFIX):
+            yield f"release-close: #{iid} is not a canary incident; skipped"
+            continue
+        if issue.get("state") != "opened":
+            yield f"release-close: incident #{iid} is already closed; nothing to do"
+        else:
+            if not has_marker(api, f"/issues/{iid}/notes", marker):
+                api.call("POST", f"/issues/{iid}/notes", {"body": (
+                    f"Released and verified: fix !{mr_iid} merged as {sha[:8]}; {released}. "
+                    f"Closing this incident.\n\n{marker}")})
+            api.call("PUT", f"/issues/{iid}", {
+                "state_event": "close", "add_labels": RESOLVED_LABEL, "remove_labels": OPEN_STATUS_LABELS})
+            yield f"release-close: closed incident #{iid} (fix !{mr_iid}, pipeline {pipeline_id})"
+        # The regression issue is titled with the rolled-back commit, the incident's short sha.
+        m = _INCIDENT_SHA.match(title)
+        if not m:
+            yield f"release-close: incident #{iid} names no commit sha; regression issues not searched"
+            continue
+        bad_sha = m.group(1)
+        found = api.call("GET", "/issues", query={
+            "state": "opened", "labels": "type::regression", "search": f"{REGRESSION_PREFIX} {bad_sha}",
+            "in": "title", "per_page": 100})
+        regressions = [r for r in found if is_regression_of(r, bad_sha)] if isinstance(found, list) else []
+        if not regressions:
+            yield f"release-close: no open regression issue for {bad_sha}"
+        for reg in regressions:
+            api.call("POST", f"/issues/{reg['iid']}/notes", {"body": (
+                f"Fixed by !{mr_iid}, merged as {sha[:8]}; {released}. Incident: #{iid}. "
+                f"Closing this regression.\n\n{marker}")})
+            api.call("PUT", f"/issues/{reg['iid']}", {"state_event": "close"})
+            yield f"release-close: closed regression #{reg['iid']} (fix !{mr_iid}, incident #{iid})"
+
+
 # --- main --------------------------------------------------------------------------------------
 
 
@@ -284,6 +445,11 @@ def main(argv: list[str] | None = None, env: dict | None = None) -> int:
     rg.add_argument("mr_iid")
     inc = sub.add_parser("incident", help="open/assign the incident issue after a ROLLBACK")
     inc.add_argument("--record", required=True, help="the canary job's verdict.json")
+    pm = sub.add_parser("postmortem", help="mention the postmortem account on a verified autoheal MR")
+    pm.add_argument("mr_iid")
+    pm.add_argument("--record", required=True, help="the canary job's verdict.json")
+    rc = sub.add_parser("release-close", help="close the incident and regression of a released fix")
+    rc.add_argument("--record", required=True, help="the canary job's verdict.json")
     a = p.parse_args(argv)
 
     token = env.get("DUO_DISPATCH_TOKEN", "")
@@ -291,11 +457,20 @@ def main(argv: list[str] | None = None, env: dict | None = None) -> int:
         print(SKIP_NO_TOKEN)
         return 0
     try:
-        if a.cmd == "risk-gate":
+        if a.cmd in ("risk-gate", "postmortem"):
             mr_iid = positive_int(a.mr_iid, "merge request iid")
         project_id = positive_int(env.get("CI_PROJECT_ID"), "CI_PROJECT_ID")
         api = Api(env.get("CI_API_V4_URL", ""), project_id, token)
-        msg = risk_gate(api, mr_iid) if a.cmd == "risk-gate" else incident(api, a.record, env)
+        if a.cmd == "release-close":
+            for line in release_close(api, a.record, env):  # one line per action, as it happens
+                print(line, flush=True)
+            return 0
+        if a.cmd == "risk-gate":
+            msg = risk_gate(api, mr_iid)
+        elif a.cmd == "postmortem":
+            msg = postmortem(api, mr_iid, a.record, env)
+        else:
+            msg = incident(api, a.record, env)
     except DispatchError as e:
         print(f"duo dispatch {a.cmd} failed: {e}", file=sys.stderr)
         return 1

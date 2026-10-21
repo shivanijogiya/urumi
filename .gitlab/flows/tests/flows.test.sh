@@ -234,6 +234,13 @@ if [ -f "$P" ]; then
   check "postmortem: a missing iid is reported with how to mention the account" "$P" \
     '.prompts[0].prompt_template.system
      | contains("No merge request iid in the goal") and contains("@ai-canary-postmortem-gitlab-ai-hackathon")'
+  # #33: CI (duo:postmortem) starts the flow before a person merges; the human gate is the merge,
+  # so there is no approval stop, and the markers are visible lines.
+  check "postmortem: no approval gate; reads the visible autoheal-verdict:start marker" "$P" \
+    '.prompts[] | select(.prompt_id == "postmortem_write") | .prompt_template.system
+     | (contains("not approved") | not) and (test("approved"; "i") | not)
+       and contains("autoheal-verdict:start") and (contains("hidden marker") | not)
+       and contains("duo:postmortem")'
 fi
 if [ -f "$R" ]; then
   check "risk-gate: low or no_merge_request ends; anything else pauses for Human Input (fail closed)" "$R" \
