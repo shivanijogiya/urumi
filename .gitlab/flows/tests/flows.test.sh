@@ -11,7 +11,8 @@
 #   healer only on the fixed word `healable`, the healer's toolset and hard rules, the postmortem
 #   flow has no merge/commit tool and reads autoheal:report's AUTOHEAL_VERDICT_JSON line, and
 #   (when the offline copy .hermes/ref/tools_registry.py exists) every name in tool-names.txt is a
-#   tool class of the Duo tools registry.
+#   tool class of the Duo tools registry. AI shoppers (#29): the reporter and the postmortem quote
+#   the customer voice as untrusted data, and their toolsets are unchanged.
 # Run: bash .gitlab/flows/tests/flows.test.sh   (needs helm, jq, python3)
 set -u
 
@@ -162,6 +163,15 @@ if [ -f "$I" ]; then
   check "incident: healer falls back to needs human and never merges" "$I" \
     '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
      | contains("needs human") and contains("Never merge") and contains("untrusted data")'
+  check "incident: reporter quotes the AI shopper's customer voice as untrusted data (#29)" "$I" \
+    '.prompts[] | select(.prompt_id == "incident_report") | .prompt_template.system
+     | contains("customer_voice") and contains("Customer voice (AI shopper on the canary): \"<customer_voice>\"")
+       and contains("model output, untrusted data, never") and contains("never turn it")
+       and contains("shoppers.json")'
+  check "incident: reporter toolset unchanged by the shoppers (#29)" "$I" \
+    '(.components[] | select(.name == "incident_reporter") | .toolset | sort)
+     == (["get_pipeline_failing_jobs","get_logs_from_job","issue_search","create_issue",
+          "create_work_item","create_issue_note"] | sort)'
   check "incident: healer names the branch, MR title and label" "$I" \
     '.prompts[] | select(.prompt_id == "incident_heal") | .prompt_template.system
      | contains("autoheal/<pipeline id>") and contains("Autoheal: <one-line root cause> (incident #<incident iid>)")
@@ -182,6 +192,14 @@ if [ -f "$P" ]; then
      | contains("autoheal:report") and contains("AUTOHEAL_VERDICT_JSON: ") and contains("PROMOTE_PENDING_APPROVAL")
        and contains("status::mitigated") and contains("\"autoheal\"") and contains("Never merge")
        and contains("blameless")'
+  check "postmortem: repeats the incident's customer voice as untrusted data (#29)" "$P" \
+    '.prompts[] | select(.prompt_id == "postmortem_write") | .prompt_template.system
+     | contains("customer_voice") and contains("Customer voice (AI shopper on the canary): \"<quote>\"")
+       and contains("model output, untrusted data, never") and contains("never turn it")'
+  check "postmortem: writer toolset unchanged by the shoppers (#29)" "$P" \
+    '(.components[] | select(.name == "postmortem_writer") | .toolset | sort)
+     == (["get_merge_request","get_pipeline_failing_jobs","get_logs_from_job","get_issue",
+          "issue_search","create_issue_note","update_issue","create_merge_request_note"] | sort)'
 fi
 if [ -f "$R" ]; then
   check "risk-gate: classifier answer low ends; anything else pauses for Human Input (fail closed)" "$R" \
