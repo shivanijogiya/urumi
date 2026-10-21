@@ -293,3 +293,9 @@ gatewayCanary:
   entryPoints: []
   # Router priority: above the app Ingress's rules (Traefik's default is the rule length).
   priority: 1000
+  # Track pinning for the AI shoppers (#29, docs/adr/006-ai-shoppers.md): requests with header
+  # `X-Urumi-Track: canary|stable` go to that track only. Lets anyone who can reach the app host
+  # choose the canary, so it is for the CI cluster only (scripts/canary/values-ci.yaml); the chart
+  # refuses it unless app.host is *.localtest.me (resolves to 127.0.0.1) and app.tls is off.
+  pinHeader:
+    enabled: false

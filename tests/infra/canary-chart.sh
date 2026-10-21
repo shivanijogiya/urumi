@@ -10,6 +10,9 @@
 #                  unchanged (so they never match canary pods); the IngressRoute splits
 #                  /api + /mcp 80/20 by default (or the weight given), on `web` (or `websecure` +
 #                  the app TLS Secret); the NetworkPolicies admit gateway and gateway-canary
+#   pinning (#29)  X-Urumi-Track canary|stable rules only with gatewayCanary.pinHeader (CI values)
+#                  and only while the canary is on; never with values-prod.yaml; refused with TLS
+#                  or an app host other than *.localtest.me
 #   bad input      weight outside 0..100, or no canary tag, fails the render
 # Prints PASS/FAIL per check; exits non-zero if any fails.
 #   tests/infra/canary-chart.sh
@@ -25,14 +28,17 @@ fail() {
   failed=1
 }
 
-# render <helm args...> : rendered objects as a JSON array on stdout.
-render() {
-  helm template urumi "$CHART" -n urumi -f "$CHART/values-local.yaml" "$@" |
+# render_with <values file> <helm args...> : rendered objects as a JSON array on stdout.
+render_with() {
+  local values=$1
+  shift
+  helm template urumi "$CHART" -n urumi -f "$values" "$@" |
     kubectl --kubeconfig /dev/null annotate --local -f - canary-chart=1 -o json |
     node -e '
       const raw = require("fs").readFileSync(0, "utf8").trim();
       process.stdout.write(raw ? "[" + raw.replace(/\n}\n{/g, "\n},\n{") + "]" : "[]");'
 }
+render() { render_with "$CHART/values-local.yaml" "$@"; }
 
 # check <name> <json> <js expression over `docs` that returns a problem string or "">
 check() {
@@ -113,6 +119,38 @@ check "canary on: weight, fault env and TLS are honoured; stable has no fault en
   if (w["urumi-gateway"] !== 65 || w["urumi-gateway-canary"] !== 35) return JSON.stringify(w);
   if (ir.spec.entryPoints.join() !== "websecure" || ir.spec.tls.secretName !== "app-tls") return "tls";'
 
+# Track pinning (#29): X-Urumi-Track rules only with pinHeader (CI values), only while the canary is on.
+check "canary on: no X-Urumi-Track rule without pinHeader (values-local default)" "$on" '
+  const ir = get("IngressRoute", "urumi-app-canary");
+  if (ir.spec.routes.length !== 1) return ir.spec.routes.length + " routes";
+  if (JSON.stringify(ir).includes("X-Urumi-Track")) return "pin rule rendered";'
+ci_off=$(render -f "$ROOT/scripts/canary/values-ci.yaml")
+check "CI values, canary off: no IngressRoute, so no pin rule" "$ci_off" '
+  const extra = docs.filter((d) => d.kind === "IngressRoute");
+  return extra.length ? "unexpected " + extra.map((d) => d.metadata.name) : "";'
+ci_on=$(render -f "$ROOT/scripts/canary/values-ci.yaml" --set gatewayCanary.enabled=true \
+  --set gatewayCanary.image.tag=c1)
+check "CI values, canary on: X-Urumi-Track canary|stable pins to one Service, above the split" "$ci_on" '
+  const ir = get("IngressRoute", "urumi-app-canary");
+  const [split, ...pins] = ir.spec.routes;
+  if (pins.length !== 2) return pins.length + " pin rules";
+  const want = { canary: "urumi-gateway-canary", stable: "urumi-gateway" };
+  for (const [track, svc] of Object.entries(want)) {
+    const r = pins.find((p) => p.match.includes("Header(`X-Urumi-Track`, `" + track + "`)"));
+    if (!r) return "no rule for " + track;
+    if (!r.match.includes("Host(`app.localtest.me`)") || !r.match.includes("(api|mcp)")) return r.match;
+    if (r.services.length !== 1 || r.services[0].name !== svc) return track + " -> " + JSON.stringify(r.services);
+    if (!(r.priority > split.priority)) return track + " priority " + r.priority;
+  }
+  if (split.match.includes("Header")) return "the weighted split needs a header";
+  if (split.services.length !== 2) return "weighted split changed";'
+prod_on=$(render_with "$CHART/values-prod.yaml" --set gatewayCanary.enabled=true \
+  --set gatewayCanary.image.tag=c1)
+check "values-prod.yaml, canary on: no X-Urumi-Track rule (users cannot pick the canary)" "$prod_on" '
+  const ir = get("IngressRoute", "urumi-app-canary");
+  if (!ir) return "no IngressRoute";
+  if (JSON.stringify(ir).includes("X-Urumi-Track")) return "pin rule rendered in production";'
+
 # refuses <name> <helm args...> : the render must fail.
 refuses() {
   local name=$1
@@ -126,5 +164,14 @@ refuses() {
 refuses "canary on without an image tag fails the render" --set gatewayCanary.enabled=true
 refuses "canary weight 101 fails the render" --set gatewayCanary.enabled=true \
   --set gatewayCanary.image.tag=c1 --set gatewayCanary.weight=101
+refuses "pinHeader with app.tls (production) fails the render" --set gatewayCanary.enabled=true \
+  --set gatewayCanary.image.tag=c1 --set gatewayCanary.pinHeader.enabled=true \
+  --set app.tls.enabled=true --set app.tls.secretName=app-tls
+refuses "pinHeader on a public app host fails the render" --set gatewayCanary.enabled=true \
+  --set gatewayCanary.image.tag=c1 --set gatewayCanary.pinHeader.enabled=true \
+  --set app.host=app.example.com
+refuses "pinHeader on values-prod.yaml fails the render" -f "$CHART/values-prod.yaml" \
+  --set gatewayCanary.enabled=true --set gatewayCanary.image.tag=c1 \
+  --set gatewayCanary.pinHeader.enabled=true
 
 exit "$failed"

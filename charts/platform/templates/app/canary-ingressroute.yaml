@@ -4,12 +4,20 @@
 {{- if or (lt $weight 0) (gt $weight 100) }}
 {{- fail "gatewayCanary.weight must be 0..100" }}
 {{- end }}
+{{- $pin := dig "pinHeader" "enabled" false $c }}
+{{- if and $pin (or .Values.app.tls.enabled (not (hasSuffix ".localtest.me" .Values.app.host))) }}
+{{- fail "gatewayCanary.pinHeader is for the CI/local cluster only (app.host *.localtest.me, no app.tls); never in production" }}
+{{- end }}
 {{- $ctx := dict "ctx" $ "component" "app" }}
 # Canary traffic split (#23): while the canary is enabled, this Traefik IngressRoute takes /api and
 # /mcp on the app host (explicit priority above the app Ingress's rules) and sends
 # gatewayCanary.weight % of requests to the canary Service, the rest to the stable one (weighted
 # round robin). Disabling the canary deletes it and the app Ingress serves those paths again, so
 # there is no gap. The dashboard (/) stays on the Ingress.
+# Track pinning (#29, docs/adr/006-ai-shoppers.md): with gatewayCanary.pinHeader.enabled (CI only,
+# scripts/canary/values-ci.yaml; refused unless app.host is *.localtest.me without TLS) two more rules send a request carrying
+# `X-Urumi-Track: canary|stable` to that track only, so an AI shopper's journey stays on one track.
+# Requests without the header still get the weighted split.
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -37,6 +45,16 @@ spec:
         - name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway-canary") }}
           port: 80
           weight: {{ $weight }}
+    {{- if $pin }}
+    {{- range $track := list "canary" "stable" }}
+    - kind: Rule
+      match: Host(`{{ $.Values.app.host }}`) && PathRegexp(`^/(api|mcp)(/|$)`) && Header(`X-Urumi-Track`, `{{ $track }}`)
+      priority: {{ add (int $c.priority) 1 }}
+      services:
+        - name: {{ include "platform.componentName" (dict "ctx" $ "component" (ternary "gateway-canary" "gateway" (eq $track "canary"))) }}
+          port: 80
+    {{- end }}
+    {{- end }}
   {{- if .Values.app.tls.enabled }}
   tls:
     secretName: {{ required "app.tls.secretName is required when app.tls.enabled" .Values.app.tls.secretName }}

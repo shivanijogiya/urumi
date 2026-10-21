@@ -16,6 +16,12 @@ everything:
     tag: ci
     pullPolicy: Never
 
+# AI shoppers (#29): pin a journey to one track with `X-Urumi-Track` while the canary is enabled.
+# CI only: the job's cluster is ephemeral and reachable only from the job.
+gatewayCanary:
+  pinHeader:
+    enabled: true
+
 gateway:
   image:
     repository: urumi-gateway
