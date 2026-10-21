@@ -17,7 +17,7 @@ import {
   type UpstreamClient,
 } from '../mcp-client/upstream-client.js';
 import { findUpstreamBySlug } from '../upstreams/repo.js';
-import { jsonBytes, MAX_RESULT_BYTES } from './limits.js';
+import { jsonBytes, MAX_PAGE_RESULT_BYTES, MAX_RESULT_BYTES } from './limits.js';
 import { isListable, type RegisteredTool, type ToolRegistry } from './registry.js';
 
 export const DEFAULT_CALL_TIMEOUT_MS = MCP_TIMEOUTS.callMs;
@@ -88,6 +88,12 @@ export function outcomeFor(code: ErrorCode): Outcome {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** A tool that returns pages: its inputSchema takes `per_page`. */
+function isPaginated(tool: RegisteredTool): boolean {
+  const props = tool.inputSchema.properties;
+  return isPlainObject(props) && 'per_page' in props;
 }
 
 export function createCallTool(deps: CallToolDeps): CallTool {
@@ -177,7 +183,8 @@ export function createCallTool(deps: CallToolDeps): CallTool {
         throw toGatewayError(err, row.slug);
       }
       const resultBytes = jsonBytes(result);
-      if (resultBytes > MAX_RESULT_BYTES) throw tooLarge(resultBytes);
+      const maxBytes = isPaginated(tool) ? MAX_PAGE_RESULT_BYTES : MAX_RESULT_BYTES;
+      if (resultBytes > maxBytes) throw tooLarge(resultBytes);
       if (result.isError) {
         record.outcome = 'error';
         record.errorCode = 'UPSTREAM_ERROR';
