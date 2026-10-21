@@ -15,10 +15,11 @@
 #      is rolled back and DECISION=PROMOTE_PENDING_APPROVAL waits for release:human-approval
 #   7. writes verdict.json (verdict.py's report + decision, timeline, CI links) and verdict.env
 #      (VERDICT=..., DECISION=..., CANARY_ACTION=...) in the repo root, and prints the report as
-#      one `CANARY_VERDICT_JSON: {...}` log line for the incident flow (.gitlab/flows/incident.yaml)
+#      one `CANARY_VERDICT_JSON: {...}` log line (the incident flow, .gitlab/flows/incident.yaml,
+#      reads the record from the incident issue that duo:incident opens from verdict.json)
 # Exit 0 only on PROMOTE (promoted, or pending approval when high risk). Exit 1 on ROLLBACK
-# ("RELEASE REJECTED: canary rolled back", so the pipeline fails and the incident flow's Pipeline
-# Failed trigger fires), on HOLD (no decision possible), on any setup failure, and when
+# ("RELEASE REJECTED: canary rolled back", so the pipeline fails and duo:incident dispatches the
+# incident, ADR 007), on HOLD (no decision possible), on any setup failure, and when
 # CANARY_FORCE_BAD=1 was not rolled back. A forced bad release therefore always fails the job:
 # DECISION and the log tell a drill that worked (ROLLBACK) from one that did not.
 #
