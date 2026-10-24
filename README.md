@@ -6,6 +6,9 @@ once. Team members then use every enabled tool through one authenticated URL, fr
 attributed to a user and audited. One Helm chart runs on local k3d and, with a different values
 file, on a VPS.
 
+**New here? Start with [`docs/RUN_ON_YOUR_COMPUTER.md`](docs/RUN_ON_YOUR_COMPUTER.md)** — a
+plain-language, step-by-step guide to running it on your own laptop.
+
 Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 · Requirement IDs (K1…D8): [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) · ADRs: [`docs/adr/`](docs/adr/)
 
@@ -128,7 +131,7 @@ You also need:
 ## Zero to running
 
 ```sh
-git clone <this repo> && cd urumi
+git clone https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase.git urumi && cd urumi
 npm install
 
 # 1. Secrets file (gitignored, mode 600). Generates every *_PASSWORD, *_SECRET and
