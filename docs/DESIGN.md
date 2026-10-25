@@ -361,3 +361,55 @@ gateway client. `apps/gateway/src/mcp-client/upstream-client.ts` still calls onl
 `client.close()`, never `transport.terminateSession()`. With one health ping per 15 s plus calls,
 the `everything` pod grows toward its 192 Mi limit (ADR 002 estimates an OOM kill about every 10
 hours); Kubernetes restarts it and the health loop reports the gap.
+
+## 12. Upgrades and rollback
+
+One Helm release (`urumi`) holds every component, so every change — image, values, chart — is one
+numbered revision (`helm history`). The same commands work locally and on a VPS; only the values
+file differs.
+
+**Upgrade.** `helm upgrade --install urumi charts/platform -n urumi -f <values> --wait`. What
+happens per component:
+
+| Component                                               | On upgrade                                                                                                                             | On `helm rollback <rev>`                                                      |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| gateway, dashboard, woo-mcp, everything                 | Deployment rolling update (new pod Ready before the old one goes)                                                                      | same rolling update back to the old pod template                              |
+| WordPress                                               | `Recreate` (the docroot PVC is ReadWriteOnce): a few seconds without a storefront                                                      | same                                                                          |
+| MariaDB, Postgres                                       | StatefulSet rolling update of pod 0; data stays on the `volumeClaimTemplates` PVC                                                      | pod spec only; **data is not rolled back**                                    |
+| WordPress docroot PVC                                   | unchanged (`helm.sh/resource-policy: keep`, also survives `helm uninstall`)                                                            | unchanged                                                                     |
+| Gateway schema                                          | new `packages/contracts/sql/NNN_*.sql` files applied on start, once, under a Postgres advisory lock (`apps/gateway/src/db/migrate.ts`) | **not reverted** (no down-migrations): the old image runs on the newer schema |
+| Store bootstrap (Job, `post-install,post-upgrade` hook) | re-runs after every install/upgrade; idempotent: checks state first, keeps a still-working Application Password, re-scales woo-mcp     | **does not run** (no `post-rollback` hook); the store keeps its state         |
+| Secrets `urumi-env`, `urumi-woo-api`                    | never rendered by the chart; untouched                                                                                                 | untouched                                                                     |
+| NetworkPolicies, RBAC, Ingress                          | created/updated/deleted to match the chart                                                                                             | restored to the old revision's set (verified: README "Upgrades and rollback") |
+
+**Rules that keep rollback safe.**
+
+1. Migrations are additive (expand, then contract in a later release): add tables/columns with
+   defaults, never drop or rename what the previous release reads. Then rolling the gateway back
+   one revision is always safe; data written by the newer release is ignored, not lost.
+2. The hook must stay idempotent and must not depend on running after a rollback.
+3. Immutable fields — StatefulSet `volumeClaimTemplates` (storage size, class) and every
+   `selector` — cannot change through `helm upgrade`. A PVC is resized with `kubectl patch pvc`
+   on a StorageClass with `allowVolumeExpansion`; a selector change needs a new object name.
+4. A failed upgrade (`--wait` timeout or failed hook) leaves the revision `failed`; recover with
+   `helm rollback urumi <last deployed rev>` after reading `kubectl get events` and the failing pod's
+   logs. `--atomic` would do this automatically but also hides the failed state, so it is not the
+   default here.
+5. Back up before risky upgrades: `kubectl -n urumi exec urumi-postgres-0 -- pg_dump -U gateway
+gateway > gateway.sql` and `kubectl -n urumi exec urumi-mariadb-0 -- mariadb-dump …`. Restores
+   are manual; there is no scheduled backup in the chart.
+
+**Automated rollback of gateway releases (CI canary, ADR 003/005).** On `main`, the `canary` job
+builds a throwaway k3d cluster, installs the last promoted commit as stable, seeds users and
+today's orders, then deploys the new gateway image as `urumi-gateway-canary` with 20 % of `/api`
+and `/mcp` (Traefik `IngressRoute`). `scripts/canary/verdict.py` sends real `woo__list_orders`
+calls with a member's key and compares the tracks (error rate, p95 latency, tool success):
+
+- **PROMOTE** → `scripts/canary/run.sh promote <tag>`: the stable image becomes the canary's tag
+  and the canary is disabled (a Helm upgrade with `--reset-then-reuse-values --no-hooks`).
+- **ROLLBACK** or **HOLD** → `scripts/canary/run.sh rollback`: the canary is disabled, stable is
+  untouched; the job fails, which opens an incident and starts the Duo incident flow (ADR 007).
+- A PROMOTE of a high-risk change is rolled back and waits for `release:human-approval`.
+
+The canary only exercises the gateway; chart-wide changes (NetworkPolicies, StatefulSets) are
+verified by the e2e suite on the local cluster and rolled back with `helm rollback`.

@@ -288,6 +288,85 @@ requests/limits and that no Secret is rendered. Not tested: TLS, cert-manager/AC
 StorageClass, pulling from a remote registry, `environmentType: production` with
 `X-Forwarded-Proto`, and there is no CI job that builds or pushes images (#22).
 
+## Stand-out items attempted
+
+Status against the brief's optional stand-out list, as of this commit. **Done** = implemented and
+tested here; **in review** = implemented, tested on the local cluster, MR open and awaiting the
+owner's approval (not on `main` yet); **partial** / **not done** say what is missing.
+
+| #     | Brief item                     | Status                                                                                                                                        | What exists                                                                                                                                                                                                                                                                                                                                                                                                                                    | Where                                                                                                                                              |
+| ----- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Production-like VPS deployment | **partial**                                                                                                                                   | Same chart + `values-prod.yaml` (TLS hosts, `cookieSecure`, HTTPS App Passwords), documented steps; **never run on a real VPS**                                                                                                                                                                                                                                                                                                                | [Local → VPS](#local--vps), issue #25                                                                                                              |
+| 2     | Tool permissions               | **in review** ([!42](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/42))                    | Per-role and per-user rules (server × tool pattern × allow/deny); members read-only by default; restricted tools hidden from MCP `tools/list` and the chat tool set and rejected with `FORBIDDEN` (audited `denied`) on direct call; admin API + dashboard **Permissions** page; e2e D9                                                                                                                                                        | ADR 008, `packages/contracts/src/permissions.ts`, `apps/gateway/src/permissions/`, `tests/e2e/d9-permissions.sh` (on the MR branch)                |
+| 3     | OAuth on the gateway           | **not done**                                                                                                                                  | MCP clients authenticate with per-user API keys (hashed, revocable); upstream GitLab uses a static PAT                                                                                                                                                                                                                                                                                                                                         | THREAT_MODEL 3.1                                                                                                                                   |
+| 4     | Many tools                     | **not done**                                                                                                                                  | Only size guards: ≤ 200 tools and ≤ 10 list pages per upstream, `inputSchema` ≤ 16 KB; no tool search or dynamic tool subset for the chat agent                                                                                                                                                                                                                                                                                                | `apps/gateway/src/core/limits.ts`                                                                                                                  |
+| 5     | Hosted MCP servers             | **not done**                                                                                                                                  | In-cluster MCP servers (woo-mcp, server-everything) are deployed by the chart, not provisioned by the gateway                                                                                                                                                                                                                                                                                                                                  | —                                                                                                                                                  |
+| 6     | Security hardening             | **done**, extended **in review** ([!43](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/43)) | On `main`: SSRF guard with DNS pinning, AES-256-GCM upstream credentials, SHA-256 API keys, login throttle, CSRF, CSP, sanitised upstream descriptions, result size caps, ingress NetworkPolicies for woo-mcp / everything / Postgres, non-root images, Secret Detection + SAST + IaC + container scanning in CI. In !43: **default-deny NetworkPolicies (ingress + egress)** with per-flow allows, **non-root WordPress**, live negative test | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md); ADR 009, `charts/platform/templates/networkpolicy/`, `docs/NETWORK_POLICIES.md` (on the MR branch) |
+| 7     | Scaling                        | **not done**                                                                                                                                  | `/mcp` is stateless and two gateway Deployments (stable + canary) already share Postgres with advisory-locked migrations, but one gateway replica is assumed: tool cache, rate limiters and login throttle are in memory                                                                                                                                                                                                                       | [`docs/DESIGN.md`](docs/DESIGN.md) §11                                                                                                             |
+| 8     | Observability                  | **partial**                                                                                                                                   | Upstream health loop (`up`/`down` + last error on **Upstreams**), per-call audit log with duration and outcome (**Audit** page), JSON logs with secret redaction, canary metrics per release (error rate, p95, tool success); no Prometheus `/metrics` or tracing                                                                                                                                                                              | `apps/gateway/src/core/health.ts`, `audit/`, `scripts/canary/verdict.py`                                                                           |
+| 9     | Upgrades and rollback          | **done**                                                                                                                                      | `helm upgrade --install` / `helm history` / `helm rollback` procedure with the rules for stateful parts, idempotent post-upgrade bootstrap hook, forward-only additive migrations, and a CI canary that promotes or rolls back the gateway automatically                                                                                                                                                                                       | [Upgrades and rollback](#upgrades-and-rollback), [`docs/DESIGN.md`](docs/DESIGN.md) §12, ADR 003                                                   |
+| Bonus | Multi-store provisioning       | **not done**                                                                                                                                  | One store per release                                                                                                                                                                                                                                                                                                                                                                                                                          | —                                                                                                                                                  |
+
+Beyond the list: the self-healing release pipeline on GitLab (canary → automatic rollback →
+incident → Duo-written fix → verified → postmortem), described at the top of this README.
+
+## Upgrades and rollback
+
+Every change ships as a Helm upgrade of the one release; every upgrade is a numbered revision.
+
+```sh
+# Upgrade (or install) with the environment's values; --wait returns only when every workload is
+# Ready and the post-upgrade bootstrap hook has completed.
+helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait --timeout 10m
+
+helm -n urumi history urumi          # revisions, status, description
+helm -n urumi get values urumi --revision <rev>   # what a revision ran with
+
+# Roll back to an earlier revision (Kubernetes objects and values only — not data).
+helm -n urumi rollback urumi <rev> --wait --timeout 10m
+```
+
+What is safe, in short (details and the reasoning: [`docs/DESIGN.md`](docs/DESIGN.md) §12):
+
+- **Data is never rolled back.** MariaDB and Postgres keep their PVCs (StatefulSet
+  `volumeClaimTemplates`); the WordPress docroot PVC has `helm.sh/resource-policy: keep`. A rollback
+  changes images, config and policies, not rows or files.
+- **Gateway migrations are forward-only and additive** (`packages/contracts/sql/`, applied on
+  start under an advisory lock), so the previous gateway image still runs on the newer schema.
+  Never ship a migration that drops or renames something the previous release reads.
+- **The bootstrap hook** (`post-install,post-upgrade`) re-runs on every upgrade and is idempotent:
+  it keeps a still-working Application Password. It does **not** run on `helm rollback`.
+- **Immutable fields** (StatefulSet `volumeClaimTemplates` sizes, selectors) cannot change through
+  an upgrade; resizing a PVC is a manual `kubectl patch pvc` on a StorageClass that allows it.
+- **Gateway releases go through the canary**: CI runs the new image beside the last promoted one,
+  `scripts/canary/verdict.py` decides, and the job promotes it or rolls it back without a person
+  (ADR 003).
+
+Recorded on the local cluster (rolling back the default-deny NetworkPolicies of [!43](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/43)
+from revision 21 to revision 20):
+
+```
+$ helm -n urumi rollback urumi 20 --wait --timeout 8m
+Rollback was a success! Happy Helming!
+$ helm -n urumi history urumi --max 3
+REVISION  UPDATED                   STATUS      CHART           DESCRIPTION
+20        Mon Oct 26 04:01:45 2026  superseded  platform-0.1.0  Upgrade complete
+21        Mon Oct 26 04:12:25 2026  superseded  platform-0.1.0  Upgrade complete
+22        Mon Oct 26 04:25:58 2026  deployed    platform-0.1.0  Rollback to 20
+$ kubectl -n urumi get netpol -o name     # the 10 policies added in 21 are gone
+networkpolicy.networking.k8s.io/urumi-everything
+networkpolicy.networking.k8s.io/urumi-postgres
+networkpolicy.networking.k8s.io/urumi-woo-mcp
+$ kubectl -n urumi get pvc -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CAPACITY:.status.capacity.storage
+NAME                         STATUS   CAPACITY
+data-urumi-mariadb-0         Bound    2Gi
+data-urumi-postgres-0        Bound    1Gi
+urumi-wordpress-wp-content   Bound    2Gi
+$ kubectl -n urumi get jobs              # still revision 21's hook run: no hook on rollback
+NAME              STATUS     COMPLETIONS   DURATION   AGE
+urumi-bootstrap   Complete   1/1           101s       21m
+```
+
 ## Troubleshooting
 
 | Symptom                                                      | Cause and fix                                                                                                                                                                                                                                                       |
