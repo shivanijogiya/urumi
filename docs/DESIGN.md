@@ -350,19 +350,19 @@ and `values-prod.yaml` (README "Local → VPS").
 
 ## 11. Tradeoffs and what we would do with more time
 
-| Decision                              | Gained                                             | Cost / next step                                                                                                               |
-| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Stateless `/mcp`, no sessions         | Key re-checked on every request; no sticky routing | No `tools/list_changed` push; clients re-list to see D6                                                                        |
-| New upstream connection per operation | Simple, no shared state, isolation per call        | Extra `initialize` round trip per call; sessions are closed without `DELETE` (see below)                                       |
-| In-memory caches and rate limits      | No Redis                                           | Per replica, reset on restart; one gateway replica is assumed                                                                  |
-| All tools visible to every user       | Simple role model                                  | Per-tool / per-upstream permissions (O3, not planned) — today a member can call write tools such as `woo__update_order_status` |
-| Request/response chat                 | Simple, stateless                                  | No streaming; long tool loops show nothing until done                                                                          |
-| Metadata-only audit                   | No second store of customer data                   | Cannot replay what a tool was asked; admin actions are not audited                                                             |
-| Static bearer for GitLab              | No OAuth flow in the gateway                       | Token expiry is manual rotation (update Secret, re-run seed)                                                                   |
+| Decision                              | Gained                                                | Cost / next step                                                                         |
+| ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Stateless `/mcp`, no sessions         | Key re-checked on every request; no sticky routing    | No `tools/list_changed` push; clients re-list to see D6                                  |
+| New upstream connection per operation | Simple, no shared state, isolation per call           | Extra `initialize` round trip per call; sessions are closed without `DELETE` (see below) |
+| In-memory caches and rate limits      | No Redis                                              | Per replica, reset on restart; one gateway replica is assumed                            |
+| Per-tool permissions read per request | A rule change applies on the next call; one code path | One small policy query per `tools/list` / `tools/call` (ADR 008); no per-API-key scopes  |
+| Request/response chat                 | Simple, stateless                                     | No streaming; long tool loops show nothing until done                                    |
+| Metadata-only audit                   | No second store of customer data                      | Cannot replay what a tool was asked; admin actions are not audited                       |
+| Static bearer for GitLab              | No OAuth flow in the gateway                          | Token expiry is manual rotation (update Secret, re-run seed)                             |
 
 With more time: terminate upstream MCP sessions (`DELETE`) after each operation; stream-cap
 response bodies before parsing; audit admin actions; per-key rate limits on `/mcp`; egress
-NetworkPolicy for the gateway; append-only audit role in Postgres; per-tool permissions;
+NetworkPolicy for the gateway; append-only audit role in Postgres; per-API-key scopes;
 confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; image
 build + e2e in CI; a real VPS run (#25).
 
