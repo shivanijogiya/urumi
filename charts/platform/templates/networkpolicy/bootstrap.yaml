@@ -1,0 +1,42 @@
+{{- if and .Values.networkPolicy.enabled .Values.bootstrap.enabled }}
+{{- $api := .Values.networkPolicy.kubeApi }}
+# Bootstrap Job egress: MariaDB (WP-CLI), WordPress (Application Password check), the Kubernetes
+# API (kubectl: Secret + woo-mcp scale) and the public internet on 80/443 (WooCommerce download
+# from wordpress.org). The API server is reached through the `kubernetes` Service, whose endpoint
+# is the control-plane address (k3d: <node IP>:6443), so it is allowed by CIDR + port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "bootstrap") }}-egress
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "bootstrap") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.np.component" (dict "ctx" $ "component" "bootstrap") | nindent 4 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.mariadb.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "mariadb") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 3306
+    {{- end }}
+    {{- if .Values.wordpress.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "wordpress") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    - to:
+        - ipBlock:
+            cidr: {{ $api.cidr }}
+      ports:
+        {{- range $api.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- include "platform.np.internetEgress" . | nindent 4 }}
+{{- end }}

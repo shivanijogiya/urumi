@@ -38,6 +38,7 @@ mariadb:
     storageClass: ''
 
 wordpress:
+  runAsNonRoot: true
   persistence:
     size: 5Gi
     storageClass: ''
@@ -86,3 +87,13 @@ gateway:
 # Canary (#23): switched on/off by scripts/canary/run.sh; app.tls also secures its IngressRoute.
 gatewayCanary:
   enabled: false
+
+# Default-deny NetworkPolicies + per-flow allows. The defaults match k3s (Traefik and CoreDNS in
+# kube-system); change ingressController / dns for another distribution. Set kubeApi.cidr to the
+# API server's address (kubectl get endpoints kubernetes) as <ip>/32 to narrow the bootstrap
+# Job's API egress.
+networkPolicy:
+  enabled: true
+  kubeApi:
+    cidr: 0.0.0.0/0
+  wordpressInternetEgress: true

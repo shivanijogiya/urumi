@@ -1,0 +1,30 @@
+{{- if .Values.networkPolicy.enabled }}
+# The ingress controller (Traefik) may reach the three workloads behind an Ingress, on their
+# container ports only: dashboard and gateway (+ canary) on app.host, WordPress on store.host.
+{{- $targets := list }}
+{{- if .Values.dashboard.enabled }}{{ $targets = append $targets (list "dashboard" 8080) }}{{ end }}
+{{- if .Values.gateway.enabled }}{{ $targets = append $targets (list "gateway" 8080) }}{{ end }}
+{{- if .Values.gatewayCanary.enabled }}{{ $targets = append $targets (list "gateway-canary" 8080) }}{{ end }}
+{{- if .Values.wordpress.enabled }}{{ $targets = append $targets (list "wordpress" 80) }}{{ end }}
+{{- range $targets }}
+{{- $component := index . 0 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" $component) }}-from-ingress
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" $component) | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.np.component" (dict "ctx" $ "component" $component) | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "platform.np.ingressControllerPeer" $ | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ index . 1 }}
+{{- end }}
+{{- end }}

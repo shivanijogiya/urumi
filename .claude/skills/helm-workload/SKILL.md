@@ -25,7 +25,7 @@ One chart: `charts/platform`. Every component is a template group under `templat
 ## Networking
 - Ingress only for `store` and `app` (dashboard + gateway). Hosts from values: local `store.localtest.me` / `app.localtest.me`.
 - `woo-mcp`: ClusterIP only, **no Ingress**, plus a NetworkPolicy allowing ingress only from pods labeled `app.kubernetes.io/component: gateway`.
-- Default-deny NetworkPolicy for the namespace is optional; if added, allow DNS egress explicitly.
+- The namespace is default-deny for ingress AND egress (`templates/networkpolicy/`, ADR 009). A new workload or flow needs its own allow policy there; `tests/infra/chart-checks.sh` fails if a workload has none. Verify live with `tests/infra/netpol-default-deny.sh`.
 
 ## Values files
 Any new key goes into `values.yaml` (defaults) and is overridden where needed in **both** `values-local.yaml` and `values-prod.yaml`. Same templates for both environments (K2).

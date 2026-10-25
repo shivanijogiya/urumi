@@ -1,0 +1,21 @@
+{{- if and .Values.networkPolicy.enabled .Values.wooMcp.enabled }}
+# woo-mcp egress: only the WooCommerce REST API on the WordPress pods. (Its ingress — gateway
+# only — is templates/woo-mcp/networkpolicy.yaml.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "woo-mcp") }}-egress
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "woo-mcp") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.np.component" (dict "ctx" $ "component" "woo-mcp") | nindent 4 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "wordpress") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+{{- end }}

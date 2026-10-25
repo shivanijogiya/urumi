@@ -1,0 +1,36 @@
+{{- if and .Values.networkPolicy.enabled .Values.wordpress.enabled }}
+# WordPress: ingress from woo-mcp (REST API) and the bootstrap Job (Application Password check),
+# besides Traefik (ingress-controller.yaml). Egress to MariaDB and, if
+# networkPolicy.wordpressInternetEgress, the public internet on 80/443 (core/plugin update checks,
+# and the store calling its own public URL on a VPS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "wordpress") }}
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "wordpress") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.np.component" (dict "ctx" $ "component" "wordpress") | nindent 4 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "woo-mcp") | nindent 8 }}
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "bootstrap") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 80
+  egress:
+    {{- if .Values.mariadb.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "mariadb") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 3306
+    {{- end }}
+    {{- if .Values.networkPolicy.wordpressInternetEgress }}
+    {{- include "platform.np.internetEgress" . | nindent 4 }}
+    {{- end }}
+{{- end }}

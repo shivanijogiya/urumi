@@ -323,7 +323,7 @@ and `values-prod.yaml` (README "Local → VPS").
 | Workload           | Kind                                        | Probes                                                                  | Notes                                                                                                  |
 | ------------------ | ------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `urumi-mariadb`    | StatefulSet, PVC                            | liveness + readiness                                                    | official `mariadb` image                                                                               |
-| `urumi-wordpress`  | Deployment, PVC (whole docroot)             | liveness + readiness                                                    | official `wordpress` image; Ingress `store.<host>`                                                     |
+| `urumi-wordpress`  | Deployment, PVC (whole docroot)             | liveness + readiness                                                    | official `wordpress` image, non-root (uid 33); Ingress `store.<host>`                                  |
 | `urumi-bootstrap`  | Job (Helm `post-install,post-upgrade` hook) | — (Jobs exempt)                                                         | installs WP + WooCommerce (pinned version), COD, publishes `urumi-woo-api`, scales woo-mcp             |
 | `urumi-postgres`   | StatefulSet, PVC                            | liveness + readiness                                                    | NetworkPolicy: gateway pods only, TCP 5432                                                             |
 | `urumi-woo-mcp`    | Deployment                                  | `/healthz`                                                              | 0 replicas until `urumi-woo-api` exists (`lookup`); NetworkPolicy: gateway pods only, 8080; no Ingress |
@@ -341,10 +341,19 @@ and `values-prod.yaml` (README "Local → VPS").
   `urumi-woo-api` only; `create` on Secrets in the namespace (Kubernetes cannot scope `create` by
   name); `get/patch/update` on the `urumi-woo-mcp` Deployment and its scale. Only the Job's
   kubectl container gets a projected token.
-- **NetworkPolicies** exist for woo-mcp, server-everything and Postgres (ingress only). MariaDB,
-  WordPress, the gateway and the dashboard have none, and there is no egress policy. k3s's
-  embedded policy controller enforces them; `scripts/smoke-ingress.sh` and
-  `tests/infra/woo-mcp-netpol.sh` prove a non-gateway pod is blocked.
+- **NetworkPolicies** (ADR 009, `templates/networkpolicy/`, `networkPolicy.enabled`, on in both
+  values files): a namespace-wide **default deny for ingress and egress**, DNS egress for every
+  pod, and one allow per real flow — Traefik → dashboard / gateway (+ canary) / WordPress;
+  gateway → Postgres, woo-mcp, everything, internet 80/443; woo-mcp → WordPress; WordPress →
+  MariaDB (+ internet); bootstrap Job → MariaDB, WordPress, Kubernetes API, internet. "Internet"
+  excludes private, CGNAT, link-local and loopback ranges. Postgres, MariaDB, everything and the
+  dashboard have no egress. k3s's kube-router enforces them; `tests/infra/netpol-default-deny.sh`
+  proves an unlabelled pod reaches nothing and a gateway-labelled pod reaches only its three
+  backends (output in `docs/NETWORK_POLICIES.md`); `tests/infra/chart-checks.sh` fails if a
+  workload has no allow policy.
+- **Non-root**: every long-running container runs as a non-root uid. WordPress runs as www-data
+  (33) with all capabilities dropped and binds port 80 through the safe pod sysctl
+  `net.ipv4.ip_unprivileged_port_start=0` (`wordpress.runAsNonRoot`, ADR 009).
 - **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
   in-cluster upstreams pass the private-address check.
 
@@ -361,8 +370,8 @@ and `values-prod.yaml` (README "Local → VPS").
 | Static bearer for GitLab              | No OAuth flow in the gateway                          | Token expiry is manual rotation (update Secret, re-run seed)                             |
 
 With more time: terminate upstream MCP sessions (`DELETE`) after each operation; stream-cap
-response bodies before parsing; audit admin actions; per-key rate limits on `/mcp`; egress
-NetworkPolicy for the gateway; append-only audit role in Postgres; per-API-key scopes;
+response bodies before parsing; audit admin actions; per-key rate limits on `/mcp`;
+append-only audit role in Postgres; per-API-key scopes;
 confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; image
 build + e2e in CI; a real VPS run (#25).
 

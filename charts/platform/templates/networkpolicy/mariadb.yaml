@@ -1,0 +1,21 @@
+{{- if and .Values.networkPolicy.enabled .Values.mariadb.enabled }}
+# MariaDB: only WordPress and the bootstrap Job (WP-CLI) connect. No egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "mariadb") }}
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "mariadb") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.np.component" (dict "ctx" $ "component" "mariadb") | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "wordpress") | nindent 8 }}
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "bootstrap") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 3306
+{{- end }}

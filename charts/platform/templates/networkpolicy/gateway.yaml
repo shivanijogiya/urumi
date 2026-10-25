@@ -1,0 +1,40 @@
+{{- if and .Values.networkPolicy.enabled .Values.gateway.enabled }}
+# Gateway (stable + canary) egress: its Postgres, the two in-cluster MCP upstreams, and the public
+# internet on 80/443 (Anthropic API, GitLab MCP, admin-registered remote MCP servers). Private
+# ranges are excluded, so — on top of the SSRF guard — an upstream URL cannot reach MariaDB,
+# WordPress or any other in-cluster address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway") }}-egress
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.gatewayPeerSelector" . | nindent 4 }}
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.postgres.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "postgres") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    {{- if .Values.wooMcp.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "woo-mcp") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+    {{- if .Values.everything.enabled }}
+    - to:
+        {{- include "platform.np.peer" (dict "ctx" $ "component" "everything") | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 3001
+    {{- end }}
+    {{- include "platform.np.internetEgress" . | nindent 4 }}
+{{- end }}
