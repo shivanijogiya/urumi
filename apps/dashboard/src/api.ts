@@ -15,10 +15,13 @@ import {
   CreateUserResponseSchema,
   ErrorEnvelopeSchema,
   LoginRequestSchema,
+  PermissionListResponseSchema,
+  PermissionResponseSchema,
   ROUTES,
   ToolListResponseSchema,
   UpdateUpstreamRequestSchema,
   UpdateUserRequestSchema,
+  UpsertPermissionRequestSchema,
   UpstreamListResponseSchema,
   UpstreamResponseSchema,
   UserListResponseSchema,
@@ -32,6 +35,7 @@ import {
   type LoginRequest,
   type UpdateUpstreamRequest,
   type UpdateUserRequest,
+  type UpsertPermissionRequest,
 } from '@urumi/contracts';
 import type { z } from 'zod';
 
@@ -191,6 +195,22 @@ export const api = {
     }).then((r) => r.keys),
   revokeUserKey: async (id: string, keyId: string) =>
     request(routePath(ROUTES.revokeUserKey.path, { id, keyId }), {
+      method: 'DELETE',
+      schema: undefined,
+    }),
+
+  listPermissions: async () =>
+    request(ROUTES.listPermissions.path, { schema: PermissionListResponseSchema }).then(
+      (r) => r.rules,
+    ),
+  upsertPermission: async (body: UpsertPermissionRequest) =>
+    request(ROUTES.upsertPermission.path, {
+      method: 'POST',
+      body: checked(UpsertPermissionRequestSchema, body),
+      schema: PermissionResponseSchema,
+    }).then((r) => r.rule),
+  deletePermission: async (id: string) =>
+    request(routePath(ROUTES.deletePermission.path, { id }), {
       method: 'DELETE',
       schema: undefined,
     }),

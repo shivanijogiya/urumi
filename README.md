@@ -153,7 +153,7 @@ scripts/build-images.sh
 # 5. Install the chart. The bootstrap hook installs WordPress + WooCommerce and starts woo-mcp.
 helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
 
-# 6. Run the eight demo flows.
+# 6. Run the demo flows (D1–D8 from the brief, plus D9: tool permissions).
 tests/e2e/run.sh all
 ```
 
@@ -197,6 +197,7 @@ PASS D5
 PASS D6
 PASS D7
 PASS D8
+PASS D9
 ```
 
 Single steps: `tests/e2e/run.sh D3 D5` (seeds first if there is no current run).
@@ -206,7 +207,7 @@ builds, chart install with the WooCommerce download — takes on the order of 10
 laptop, most of it image builds and the bootstrap Job. `run.sh all` takes a few minutes; D7 alone
 waits for one health cycle down (≤ 25 s) and back up (≤ 60 s).
 
-## Demo walkthrough (manual D1–D8)
+## Demo walkthrough (manual D1–D9)
 
 `tests/e2e/run.sh all` creates two members, `usera@urumi.test` (User A) and `userb@urumi.test`
 (User B); their temporary passwords are kept in `tests/e2e/.out/users.json`. To click through by
@@ -242,6 +243,12 @@ hand, create them yourself under **Members** (admin), which shows each temporary
    tools keep working in chat and in the Inspector. Scale back to 1 and it returns to **up**.
 8. **D8 — audit.** Admin → **Audit**: every call above, with user, source (`chat`/`mcp`), server,
    tool, time, duration, outcome. Members see only their own rows.
+9. **D9 — tool permissions** (ADR 008). Members are read-only by default: User B's Inspector
+   **List Tools** has no `woo__create_product` / `woo__update_order_status`, and calling
+   `woo__create_product` anyway returns `FORBIDDEN` — **Audit** shows it as `denied`. Admin →
+   **Permissions** lists the rules, adds per-role or per-user rules, and previews a user's
+   effective tools. The e2e seed gives User A a per-user grant for `woo__create_product`, which D2
+   needs.
 
 ## Local → VPS
 
@@ -311,7 +318,7 @@ apps/dashboard/      React + Vite admin/member UI and chat panel (served by ngin
 apps/everything/     Dockerfile for @modelcontextprotocol/server-everything (upstream 2)
 packages/contracts/  Shared zod schemas: API, DB schema (sql/), tool naming, error envelope
 charts/platform/     The one Helm chart; values.yaml, values-local.yaml, values-prod.yaml
-tests/e2e/           D1–D8 scripted flows (run.sh <step|all>), seed scripts
+tests/e2e/           D1–D9 scripted flows (run.sh <step|all>), seed scripts
 tests/infra/         Cluster checks: chart, persistence, bootstrap, NetworkPolicies, auth
 scripts/             dev-setup, gen-env, cluster-up/down, secrets-apply, build-images
 docs/                REQUIREMENTS, PLAN, DESIGN, THREAT_MODEL, adr/

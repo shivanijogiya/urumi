@@ -11,11 +11,13 @@ import { registerChatRoutes } from './chat/routes.js';
 import { createChatService } from './chat/service.js';
 import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
 import { ToolRegistry } from './core/registry.js';
+import { createListToolsFor, type ListToolsFor } from './core/visible-tools.js';
 import { registerCanary } from './http/canary.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
 import { registerMcpEndpoint } from './mcp/endpoint.js';
+import { registerPermissionRoutes } from './permissions/routes.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
@@ -27,6 +29,8 @@ export const READY_TIMEOUT_MS = 1000;
 /** Aggregation and the one call path, shared by routes, the MCP endpoint (#15) and chat (#19). */
 export interface ToolService {
   registry: ToolRegistry;
+  /** The tools a user may see (tool permissions applied): every tool list goes through this. */
+  listToolsFor: ListToolsFor;
   callTool: CallTool;
 }
 
@@ -179,20 +183,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       await deps.onCallFinished?.(record);
     },
   });
-  app.decorate('tools', { registry, callTool });
+  const listToolsFor = createListToolsFor(deps.pool, registry);
+  app.decorate('tools', { registry, listToolsFor, callTool });
 
   registerUserRoutes(app);
   registerKeyRoutes(app);
   registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
-  registerToolRoutes(app, registry);
+  registerToolRoutes(app, { registry, listToolsFor });
   registerAuditRoutes(app);
-  registerMcpEndpoint(app, { registry, callTool });
+  registerPermissionRoutes(app);
+  registerMcpEndpoint(app, { listToolsFor, callTool });
   const anthropic = deps.chat?.anthropic;
   registerChatRoutes(app, {
     service: anthropic
       ? createChatService({
           anthropic,
-          listTools: () => registry.listTools(),
+          listToolsFor,
           callTool,
           ...(deps.chat?.model ? { model: deps.chat.model } : {}),
         })

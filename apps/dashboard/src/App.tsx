@@ -10,6 +10,7 @@ import { Chat } from './pages/Chat.js';
 import { Keys } from './pages/Keys.js';
 import { Login } from './pages/Login.js';
 import { Members } from './pages/Members.js';
+import { Permissions } from './pages/Permissions.js';
 import { Tools } from './pages/Tools.js';
 import { Upstreams } from './pages/Upstreams.js';
 
@@ -67,6 +68,14 @@ export function AppRoutes() {
             element={
               <RequireAdmin>
                 <Members />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="permissions"
+            element={
+              <RequireAdmin>
+                <Permissions />
               </RequireAdmin>
             }
           />

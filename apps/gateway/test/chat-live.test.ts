@@ -13,7 +13,7 @@ describe.skipIf(!live)('chat against the live Anthropic API', () => {
   it('answers "Reply with OK" with no tools', async () => {
     const service = createChatService({
       anthropic: createAnthropicClient(key!),
-      listTools: async () => [],
+      listToolsFor: async () => [],
       callTool: () => Promise.reject(new Error('no tools in the smoke test')),
       ...(process.env.CHAT_MODEL ? { model: process.env.CHAT_MODEL } : {}),
     });

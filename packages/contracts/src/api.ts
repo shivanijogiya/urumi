@@ -35,6 +35,9 @@ export const ROUTES = {
   listUpstreamTools: { method: 'GET', path: '/api/upstreams/:id/tools', auth: 'session' },
   listTools: { method: 'GET', path: '/api/tools', auth: 'session' },
   listAudit: { method: 'GET', path: '/api/audit', auth: 'session' },
+  listPermissions: { method: 'GET', path: '/api/permissions', auth: 'admin' },
+  upsertPermission: { method: 'POST', path: '/api/permissions', auth: 'admin' },
+  deletePermission: { method: 'DELETE', path: '/api/permissions/:id', auth: 'admin' },
   chat: { method: 'POST', path: '/api/chat', auth: 'session' },
 } as const satisfies Record<string, Route>;
 
@@ -142,7 +145,10 @@ export const UpstreamResponseSchema = z.object({ upstream: UpstreamSchema });
 export const UpstreamListResponseSchema = z.object({ upstreams: z.array(UpstreamSchema) });
 
 // ── Tools ────────────────────────────────────────────────────────────────────────────────────
-/** Returned by GET /api/tools and GET /api/upstreams/:id/tools. Descriptions are untrusted data. */
+/**
+ * Returned by GET /api/tools and GET /api/upstreams/:id/tools: only the tools the caller's tool
+ * permissions allow (permissions.ts). Descriptions are untrusted data.
+ */
 export const ToolSchema = z.object({
   name: z.string(), // qualified: {slug}__{tool}
   serverSlug: slug,

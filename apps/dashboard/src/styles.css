@@ -517,3 +517,13 @@ tr.revoked td {
 .composer textarea {
   resize: vertical;
 }
+
+/* Permissions page: effective-access preview. */
+.tool-access {
+  list-style: none;
+  padding: 0;
+  columns: 2;
+}
+.tool-access li {
+  margin: 0.15rem 0;
+}

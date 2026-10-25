@@ -96,7 +96,7 @@ and results only as `tool_result` blocks.
 
 ## 3. Data model
 
-`packages/contracts/sql/001_init.sql`, applied on gateway start by
+`packages/contracts/sql/001_init.sql` and `002_tool_permissions.sql` (ADR 008), applied on gateway start by
 `apps/gateway/src/db/migrate.ts` (advisory lock, `schema_migrations` table, idempotent).
 
 ```mermaid
@@ -248,6 +248,17 @@ keys. Members can list upstreams (without `url`), tools, their own keys, and the
 or disable themselves, and the last active admin cannot be removed (row-locked,
 `users/routes.ts`). There is no self-signup: admins create members and get a one-time
 `tempPassword` (16 random bytes).
+
+**Tool permissions** (ADR 008; `packages/contracts/src/permissions.ts`,
+`apps/gateway/src/permissions/`, `core/visible-tools.ts`). Rules in `tool_permissions`
+(role or user × server or `*` × tool / `prefix*` / `*` × allow/deny); a user's own rules override
+the role's, the most specific rule wins, deny wins ties, and no match means deny. Default: admins
+everything; members only read tools (`woo__list_products`, `woo__list_orders`, `woo__get_order`,
+everything's harmless tools, GitLab `get_*` / `list_*` / search). Every tool list (MCP
+`tools/list`, chat tool set, `/api/tools`, `/api/upstreams/:id/tools`) is filtered by
+`listToolsFor(userId)`, and `callTool` rejects a disallowed name with `FORBIDDEN` before touching
+the upstream, audited as `denied`. Admins edit rules at `/api/permissions` (dashboard
+**Permissions**, with an effective-access preview using the same evaluator). Proven by D9.
 
 **API keys** (`apps/gateway/src/auth/api-keys.ts`, `keys/`). `urk_` + base64url(32 random
 bytes), returned once by `POST /api/keys`. The DB keeps sha256 (`key_hash`, unique) and an 8-char
