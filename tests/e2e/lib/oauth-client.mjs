@@ -8,6 +8,7 @@
 // Writes {client_id, access_token, refresh_token} to OAUTH_STATE (mode 600; never stdout) and
 // prints one JSON object: what the SDK sent to /authorize (method, resource; no secrets), the
 // tools/list names and, if a tool was given, its CallToolResult.
+import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -46,6 +47,11 @@ const provider = {
   saved: undefined,
   verifier: '',
   code: undefined,
+  // The SDK sends `state` only if the provider supplies one; the gateway must pass it back.
+  stateValue: randomBytes(16).toString('hex'),
+  state() {
+    return this.stateValue;
+  },
   get redirectUrl() {
     return REDIRECT;
   },
@@ -105,7 +111,8 @@ const provider = {
     });
     if (decided.status !== 200) throw new Error(`consent POST answered ${decided.status}`);
     const back = new URL((await decided.json()).redirectTo);
-    seen.stateRoundTrip = back.searchParams.get('state') === p.get('state');
+    seen.stateRoundTrip =
+      p.get('state') === this.stateValue && back.searchParams.get('state') === this.stateValue;
     seen.iss = back.searchParams.get('iss');
     this.code = back.searchParams.get('code');
   },

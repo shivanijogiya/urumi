@@ -55,7 +55,7 @@ mcp_status() {
 }
 # token_req <jq filter over the state file> : POST /oauth/token (form body from jq on stdin).
 token_req() {
-  jq -r "$1" "$STATE" | curl -sS --max-time 20 -o "$LAST" -w '%{http_code}' -X POST \
+  jq -j "$1" "$STATE" | curl -sS --max-time 20 -o "$LAST" -w '%{http_code}' -X POST \
     "$APP_URL/oauth/token" -H 'content-type: application/x-www-form-urlencoded' --data-binary @- \
     2>/dev/null || echo 000
 }

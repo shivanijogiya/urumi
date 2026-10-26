@@ -50,6 +50,10 @@ class TestProvider implements OAuthClientProvider {
   verifier = '';
   code: string | undefined;
   authorizeParams: URLSearchParams | undefined;
+  readonly stateValue = 'sdk-state-1234';
+  state() {
+    return this.stateValue;
+  }
   constructor(private readonly cookie: string) {}
   get redirectUrl() {
     return 'http://127.0.0.1:43999/callback';
@@ -98,7 +102,8 @@ class TestProvider implements OAuthClientProvider {
       body: JSON.stringify({ approve: true, consentToken }),
     });
     const back = new URL(((await decided.json()) as { redirectTo: string }).redirectTo);
-    expect(back.searchParams.get('state')).toBe(url.searchParams.get('state'));
+    expect(url.searchParams.get('state')).toBe(this.stateValue);
+    expect(back.searchParams.get('state')).toBe(this.stateValue);
     this.code = back.searchParams.get('code')!;
   }
 }
