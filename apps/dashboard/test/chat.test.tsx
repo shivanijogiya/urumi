@@ -83,4 +83,39 @@ describe('chat page', () => {
     // The unanswered message goes back into the box instead of into the history.
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('hello');
   });
+
+  it('discovery mode: says so, shows the searches and the real tools executed (ADR 012)', async () => {
+    stubApi({
+      'GET /api/auth/me': json({ user: member }),
+      'POST /api/chat': json({
+        reply: 'Refunded.',
+        toolMode: 'discovery',
+        discoverySearches: [
+          { query: 'refund payment', resultCount: 1, top: ['synth__refund_payment'] },
+        ],
+        toolCalls: [
+          {
+            name: 'synth__refund_payment',
+            serverSlug: 'synth',
+            outcome: 'ok',
+            durationMs: 40,
+            errorCode: null,
+            via: 'discovery',
+          },
+        ],
+      }),
+    });
+    const { user } = renderApp('/chat');
+    await user.type(await screen.findByLabelText('Message'), 'Refund order 1');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Refunded.')).toBeTruthy();
+    expect(screen.getByRole('note').textContent).toContain('Discovery mode');
+    const searches = screen.getByRole('list', { name: 'Tool searches' });
+    expect(searches.textContent).toContain('refund payment');
+    expect(searches.textContent).toContain('1 match');
+    const tools = screen.getByRole('list', { name: 'Tools used' });
+    expect(within(tools).getByText('synth__refund_payment')).toBeTruthy();
+    expect(within(tools).getByText('via gateway__call_tool')).toBeTruthy();
+    expect(screen.getByText('Tools executed')).toBeTruthy();
+  });
 });

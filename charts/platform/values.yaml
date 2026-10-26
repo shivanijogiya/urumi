@@ -295,6 +295,10 @@ gateway:
   # answers 503. Chat needs egress to api.anthropic.com:443.
   chatModel: claude-sonnet-5-5
   chatSecretKey: ANTHROPIC_API_KEY
+  # Discovery mode (ADR 012): when a user may call more than this many tools, the chat agent gets
+  # only gateway__search_tools + gateway__call_tool and finds tools by search. 0 = always.
+  # (MCP clients choose per request with /mcp?mode=discovery.)
+  chatDiscoveryThreshold: 40
   # Env var -> key inside `secretName`. The DB password comes from postgres.secretKeys.password.
   # (A GATEWAY_SESSION_SECRET key in the Secret is unused and harmless: sessions are DB tokens.)
   secretKeys:

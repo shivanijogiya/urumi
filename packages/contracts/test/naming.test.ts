@@ -76,3 +76,16 @@ describe('fnv1a32', () => {
     expect(fnv1a32('é')).toMatch(/^[0-9a-f]{8}$/);
   });
 });
+
+describe('reserved slug (ADR 012)', () => {
+  it('gateway is reserved for the meta-tools', async () => {
+    const { CreateUpstreamRequestSchema, RESERVED_SLUGS, SEARCH_TOOLS_NAME, CALL_TOOL_NAME } =
+      await import('../src/index.js');
+    expect(RESERVED_SLUGS).toContain('gateway');
+    expect(SEARCH_TOOLS_NAME).toBe('gateway__search_tools');
+    expect(CALL_TOOL_NAME).toBe('gateway__call_tool');
+    const body = { name: 'x', url: 'https://example.com/mcp' };
+    expect(CreateUpstreamRequestSchema.safeParse({ ...body, slug: 'gateway' }).success).toBe(false);
+    expect(CreateUpstreamRequestSchema.safeParse({ ...body, slug: 'gateway2' }).success).toBe(true);
+  });
+});

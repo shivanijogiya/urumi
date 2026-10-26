@@ -262,3 +262,13 @@ describe('loadConfig: metrics (ADR 011)', () => {
     expect(errorFor({ ...valid, METRICS_PORT: '70000' }).message).toContain('METRICS_PORT');
   });
 });
+
+describe('loadConfig: discovery (ADR 012)', () => {
+  it('switches chat to discovery above 40 tools by default; configurable; 0 = always', () => {
+    expect(loadConfig(valid).chatDiscoveryThreshold).toBe(40);
+    expect(loadConfig({ ...valid, CHAT_DISCOVERY_THRESHOLD: '0' }).chatDiscoveryThreshold).toBe(0);
+    expect(errorFor({ ...valid, CHAT_DISCOVERY_THRESHOLD: 'many' }).message).toContain(
+      'CHAT_DISCOVERY_THRESHOLD',
+    );
+  });
+});
