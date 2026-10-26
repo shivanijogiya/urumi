@@ -79,7 +79,7 @@ scene numbers are filled in after recording.
 | Hosted MCP servers                                      | `apps/gateway/src/hosted/`, `charts/platform/templates/hosted/`, dashboard `HostedServers.tsx`                                 | `hosted.test.ts`, `hosted-unit.test.ts`, dashboard `hosted.test.tsx`, `tests/infra/hosted-chart.sh`; D14     | ADR 014, THREAT 3.9                        | see NARRATION scene N (TBD) |
 | Multi-store provisioning                                | `apps/gateway/src/stores/`, `charts/platform/templates/stores/`, dashboard `Stores.tsx`                                        | `stores.test.ts`, `stores-unit.test.ts`, dashboard `stores.test.tsx`, `tests/infra/stores-chart.sh`; D15     | ADR 015, THREAT 3.10                       | see NARRATION scene N (TBD) |
 | Upgrades and rollback                                   | one Helm release, idempotent bootstrap hook, additive `packages/contracts/sql/` migrations                                     | recorded `helm rollback` (README); canary promote/rollback in CI                                             | README "Upgrades and rollback", DESIGN §12 | see NARRATION scene N (TBD) |
-| VPS deployment                                          | `charts/platform/values-prod.yaml`                                                                                             | `tests/infra/chart-checks.sh` renders it; **never deployed** (see below)                                     | README "Local → VPS"                       | see NARRATION scene N (TBD) |
+| VPS deployment                                          | `charts/platform/values-prod.yaml`                                                                                             | `chart-checks.sh` renders it; deployed to a cloud VM, D1–D15 pass (see below)                                     | README "Local → VPS"                       | see NARRATION scene N (TBD) |
 | Release pipeline (H1)                                   | `.gitlab-ci.yml`, `.gitlab/ci/release.gitlab-ci.yml`                                                                           | `.gitlab/ci/tests/*.test.sh` (CI `release:config-tests`)                                                     | `.gitlab/ci/README.md`                     | see NARRATION scene N (TBD) |
 | Canary + verdict (H2)                                   | `.gitlab/ci/canary.gitlab-ci.yml`, `scripts/canary/verdict.py`, `run.sh`, `ci.sh`                                              | `scripts/canary/test_*.py` (CI `canary:unit-tests`), gateway `canary.test.ts`, `tests/infra/canary-chart.sh` | ADR 003, ADR 005                           | see NARRATION scene N (TBD) |
 | Duo flows: risk gate, incident, postmortem (H3, H4)     | `.gitlab/flows/*.yaml`, `.gitlab/ci/duo-dispatch.gitlab-ci.yml`, `scripts/canary/risk.py`                                      | `.gitlab/flows/tests/flows.test.sh`, `duo-dispatch.test.sh`; project history (README table)                  | ADR 004, ADR 007, HACKATHON.md             | see NARRATION scene N (TBD) |
@@ -89,14 +89,11 @@ Requirement IDs with no automated test of their own: **K1** (exercised by every 
 
 ## Known limitations / not done
 
-- **VPS deployment not performed.** `charts/platform/values-prod.yaml` exists and sets placeholder
-  hosts `store.example.com` / `app.example.com`, TLS Secret names (off until a certificate
-  exists), `gateway.publicOrigin: https://app.example.com`, `cookieSecure: true`,
-  `bootstrap.environmentType: production`, `wooMcp.forwardedProto: https`, 5 Gi volumes on the
-  default StorageClass, `registry.gitlab.com/<group>/<project>/…` images, 2 gateway replicas,
-  hosted servers with a registry-only allow-list and `requireDigest: true`, and
-  `multiStore.enabled: false`. Only rendering is tested; TLS, cert-manager/ACME and a remote
-  registry pull are not.
+- **VPS: cloud VM, not an always-on VPS.** The chart with `values-prod.yaml` (plus a small demo
+  overlay: local rate limits, multi-store on, tag-pinned hosted images) runs on a GitHub Codespaces
+  VM (k3s via k3d) with public HTTPS URLs, images pulled from the GitLab registry; `run.sh all`
+  passes D1–D15 there (README "Local → VPS"). It sleeps after 4 h idle. Not tested: cert-manager /
+  ACME and a real DNS name.
 - **Real third-party OAuth sign-in** (Claude Code, MCP Inspector, Cursor) was not run in the
   automated checks; the OAuth flow is tested with the official MCP SDK client only
   (`oauth-sdk.test.ts`, D13).
