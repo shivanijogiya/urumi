@@ -37,7 +37,7 @@ spec:
           port: 3001
     {{- end }}
     {{- if .Values.hosted.enabled }}
-    # Hosted MCP servers (ADR 014): the pods the gateway runs (any port: each server has its own)…
+    # Hosted MCP servers (ADR 014): the pods the gateway runs (any port: each server has its own).
     - to:
         - namespaceSelector:
             matchLabels:
@@ -45,7 +45,23 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/managed-by: urumi-gateway
-    # …and the Kubernetes API that creates them (same rule as the bootstrap Job; narrow kubeApi.cidr).
+    {{- end }}
+    {{- if .Values.multiStore.enabled }}
+    # Stores (ADR 015): each store's woo-mcp, nothing else in a store namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              urumi.io/store: "true"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: urumi-gateway
+              app.kubernetes.io/component: woo-mcp
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+    {{- if include "platform.gatewayKubeAccess" . }}
+    # The Kubernetes API that creates them (same rule as the bootstrap Job; narrow kubeApi.cidr).
     - to:
         - ipBlock:
             cidr: {{ .Values.networkPolicy.kubeApi.cidr }}

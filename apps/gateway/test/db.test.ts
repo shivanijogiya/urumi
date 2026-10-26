@@ -25,6 +25,7 @@ const TABLES = [
   'oauth_tokens',
   'rate_limit_buckets',
   'sessions',
+  'stores',
   'tool_permissions',
   'upstreams',
   'users',
@@ -60,8 +61,16 @@ async function tables(p: pg.Pool): Promise<string[]> {
 describe('migrate', () => {
   it('applies the contracts migrations and records each version', async () => {
     const p = pool(await freshDatabase());
-    expect(await migrate(p, MIGRATIONS_DIR)).toEqual(['001', '002', '003', '004', '005', '006']);
-    expect(await versions(p)).toEqual(['001', '002', '003', '004', '005', '006']);
+    expect(await migrate(p, MIGRATIONS_DIR)).toEqual([
+      '001',
+      '002',
+      '003',
+      '004',
+      '005',
+      '006',
+      '007',
+    ]);
+    expect(await versions(p)).toEqual(['001', '002', '003', '004', '005', '006', '007']);
     expect(await tables(p)).toEqual(TABLES);
   });
 
@@ -69,7 +78,7 @@ describe('migrate', () => {
     const p = pool(await freshDatabase());
     await migrate(p, MIGRATIONS_DIR);
     expect(await migrate(p, MIGRATIONS_DIR)).toEqual([]);
-    expect(await versions(p)).toEqual(['001', '002', '003', '004', '005', '006']);
+    expect(await versions(p)).toEqual(['001', '002', '003', '004', '005', '006', '007']);
   });
 
   it('is safe when two instances start at once (advisory lock)', async () => {
@@ -78,8 +87,8 @@ describe('migrate', () => {
       migrate(pool(db), MIGRATIONS_DIR),
       migrate(pool(db), MIGRATIONS_DIR),
     ]);
-    expect(results.flat()).toEqual(['001', '002', '003', '004', '005', '006']);
-    expect(await versions(pool(db))).toEqual(['001', '002', '003', '004', '005', '006']);
+    expect(results.flat()).toEqual(['001', '002', '003', '004', '005', '006', '007']);
+    expect(await versions(pool(db))).toEqual(['001', '002', '003', '004', '005', '006', '007']);
   });
 
   it('rolls back a failing file completely and does not record it', async () => {

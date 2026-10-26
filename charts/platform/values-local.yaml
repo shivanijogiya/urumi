@@ -112,3 +112,13 @@ hosted:
   allowedImages:
     - k3d-urumi-registry.localhost:5005/
     - docker.io/mcp/
+
+# Multiple stores (ADR 015): on locally, at most 3; storefronts at http://<slug>.store.localtest.me
+# (*.localtest.me resolves to 127.0.0.1). local-path volumes are deleted with the namespace.
+multiStore:
+  enabled: true
+  maxStores: 3
+  domainSuffix: store.localtest.me
+  scheme: http
+  persistence:
+    storageClass: local-path

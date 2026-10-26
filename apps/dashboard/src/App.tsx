@@ -14,6 +14,7 @@ import { Login } from './pages/Login.js';
 import { Health } from './pages/Health.js';
 import { Members } from './pages/Members.js';
 import { Permissions } from './pages/Permissions.js';
+import { Stores } from './pages/Stores.js';
 import { Tools } from './pages/Tools.js';
 import { Upstreams } from './pages/Upstreams.js';
 
@@ -93,6 +94,14 @@ export function AppRoutes() {
             element={
               <RequireAdmin>
                 <Health />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="stores"
+            element={
+              <RequireAdmin>
+                <Stores />
               </RequireAdmin>
             }
           />

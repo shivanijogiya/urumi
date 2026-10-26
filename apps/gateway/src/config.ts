@@ -4,6 +4,7 @@ import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { z } from 'zod';
 import { DEFAULT_CHAT_MODEL } from './chat/service.js';
 import { parseRedirectSchemes } from './oauth/redirect.js';
+import { StoreSettingsSchema, type StoreSettings } from './stores/settings.js';
 
 /** Optional string; an empty value counts as unset. */
 const optional = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
@@ -199,6 +200,36 @@ const EnvSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.coerce.number().int().min(0).max(100).default(5),
   ),
+  // Multiple stores (ADR 015): the gateway provisions extra WooCommerce stores, one namespace each,
+  // through the Kubernetes API. MULTI_STORE_CONFIG is the chart's `multiStore` settings as JSON.
+  MULTI_STORE_ENABLED: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'], 'must be true or false')
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
+  MULTI_STORE_CONFIG: optional(),
+  MULTI_STORE_MAX_STORES: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(50).default(3),
+  ),
+  MULTI_STORE_SCRIPTS_DIR: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^\/[A-Za-z0-9._/-]{1,200}$/, 'must be an absolute path')
+      .default('/etc/urumi/store-bootstrap'),
+  ),
+  // The chart's own store (upstream `woo`), shown as built-in on the Stores page.
+  BUILTIN_STORE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.url({ protocol: /^https?$/ }).optional(),
+  ),
+  BUILTIN_STORE_NAME: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().max(100).default('Urumi Store'),
+  ),
   KUBERNETES_SERVICE_HOST: optional(),
   KUBERNETES_SERVICE_PORT: port(443),
   // This replica's name for the health-loop lease (Kubernetes: the pod name). Default: hostname.
@@ -266,6 +297,16 @@ export interface Config {
     kubeHost: string;
     kubePort: number;
   } | null;
+  /** Multiple stores (ADR 015); null when MULTI_STORE_ENABLED is not true. */
+  multiStore: {
+    settings: StoreSettings;
+    maxStores: number;
+    scriptsDir: string;
+    kubeHost: string;
+    kubePort: number;
+  } | null;
+  /** The chart's original store, or null if BUILTIN_STORE_URL is unset. */
+  builtInStore: { name: string; slug: string; storefrontUrl: string } | null;
 }
 
 export class ConfigError extends Error {
@@ -288,6 +329,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   }
   if (parsed.success && parsed.data.HOSTED_ENABLED && isUnset('KUBERNETES_SERVICE_HOST')) {
     problems.push('KUBERNETES_SERVICE_HOST is missing (needed when HOSTED_ENABLED=true)');
+  }
+  let storeSettings: StoreSettings | null = null;
+  if (parsed.success && parsed.data.MULTI_STORE_ENABLED) {
+    if (isUnset('KUBERNETES_SERVICE_HOST')) {
+      problems.push('KUBERNETES_SERVICE_HOST is missing (needed when MULTI_STORE_ENABLED=true)');
+    }
+    if (isUnset('MULTI_STORE_CONFIG')) {
+      problems.push('MULTI_STORE_CONFIG is missing (needed when MULTI_STORE_ENABLED=true)');
+    } else {
+      storeSettings = parseStoreSettings(env.MULTI_STORE_CONFIG!, problems);
+    }
   }
   if (!parsed.success || problems.length) {
     throw new ConfigError(`Invalid configuration: ${[...new Set(problems)].join('; ')}`);
@@ -334,7 +386,42 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
           kubePort: e.KUBERNETES_SERVICE_PORT,
         }
       : null,
+    multiStore:
+      e.MULTI_STORE_ENABLED && storeSettings
+        ? {
+            settings: storeSettings,
+            maxStores: e.MULTI_STORE_MAX_STORES,
+            scriptsDir: e.MULTI_STORE_SCRIPTS_DIR,
+            kubeHost: e.KUBERNETES_SERVICE_HOST!,
+            kubePort: e.KUBERNETES_SERVICE_PORT,
+          }
+        : null,
+    builtInStore: e.BUILTIN_STORE_URL
+      ? {
+          name: e.BUILTIN_STORE_NAME,
+          slug: 'woo',
+          storefrontUrl: e.BUILTIN_STORE_URL.replace(/\/$/, ''),
+        }
+      : null,
   };
+}
+
+/** MULTI_STORE_CONFIG: JSON of the chart's settings. Problems name fields, never values. */
+function parseStoreSettings(raw: string, problems: string[]): StoreSettings | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    problems.push('MULTI_STORE_CONFIG is not valid JSON');
+    return null;
+  }
+  const r = StoreSettingsSchema.safeParse(json);
+  if (!r.success) {
+    const fields = [...new Set(r.error.issues.map((i) => i.path.join('.') || '(root)'))];
+    problems.push(`MULTI_STORE_CONFIG is invalid at ${fields.slice(0, 5).join(', ')}`);
+    return null;
+  }
+  return r.data;
 }
 
 function reason(issue: z.core.$ZodIssue): string {

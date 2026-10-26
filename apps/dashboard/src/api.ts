@@ -12,6 +12,9 @@ import {
   CreateKeyRequestSchema,
   CreateKeyResponseSchema,
   CreateHostedServerRequestSchema,
+  CreateStoreRequestSchema,
+  StoreListResponseSchema,
+  StoreResponseSchema,
   CreateUpstreamRequestSchema,
   HostedServerListResponseSchema,
   HostedServerResponseSchema,
@@ -38,6 +41,7 @@ import {
   type ChatRequest,
   type ChangePasswordRequest,
   type CreateHostedServerRequest,
+  type CreateStoreRequest,
   type CreateUpstreamRequest,
   type CreateUserRequest,
   type ErrorCode,
@@ -270,6 +274,24 @@ export const api = {
       method: 'DELETE',
       schema: undefined,
     }),
+  // Stores (ADR 015), admin only. No password is ever sent or returned.
+  listStores: async () => request(ROUTES.listStores.path, { schema: StoreListResponseSchema }),
+  createStore: async (body: CreateStoreRequest) =>
+    request(ROUTES.createStore.path, {
+      method: 'POST',
+      body: checked(CreateStoreRequestSchema, body),
+      schema: StoreResponseSchema,
+    }).then((r) => r.store),
+  retryStore: async (id: string) =>
+    request(routePath(ROUTES.retryStore.path, { id }), {
+      method: 'POST',
+      schema: StoreResponseSchema,
+    }).then((r) => r.store),
+  deleteStore: async (id: string) =>
+    request(routePath(ROUTES.deleteStore.path, { id }), {
+      method: 'DELETE',
+      schema: StoreResponseSchema,
+    }).then((r) => r.store),
   listUpstreamTools: async (id: string) =>
     request(routePath(ROUTES.listUpstreamTools.path, { id }), {
       schema: ToolListResponseSchema,

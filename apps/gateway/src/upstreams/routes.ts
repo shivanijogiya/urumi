@@ -31,6 +31,8 @@ export const UpstreamParamsSchema = z.object({ id: z.uuid() });
 /** Hosted servers' upstream rows (ADR 014) change only through /api/hosted-servers. */
 const hostedManaged = () =>
   conflict('This upstream is a hosted server: manage it under Hosted servers');
+/** Stores' upstream rows (ADR 015) change only through /api/stores. */
+const storeManaged = () => conflict('This upstream is a store: manage it under Stores');
 
 export interface UpstreamRouteOptions {
   /** GATEWAY_ENC_KEY. */
@@ -91,6 +93,7 @@ export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRoute
       const current = await findUpstreamRow(tx, id, { forUpdate: true });
       if (!current) throw notFound('Upstream');
       if (current.hosted) throw hostedManaged();
+      if (current.store) throw storeManaged();
       // A stored credential must not follow the upstream to a new origin (scheme, host, port)
       // unless the admin re-enters it or removes it. Path-only changes keep it.
       if (
@@ -119,6 +122,7 @@ export function registerUpstreamRoutes(app: FastifyInstance, opts: UpstreamRoute
     const current = await findUpstreamRow(pool, id);
     if (!current) throw notFound('Upstream');
     if (current.hosted) throw hostedManaged();
+    if (current.store) throw storeManaged();
     if (!(await deleteUpstream(pool, id))) throw notFound('Upstream');
     registry.invalidate(id);
     return reply.code(204).send();

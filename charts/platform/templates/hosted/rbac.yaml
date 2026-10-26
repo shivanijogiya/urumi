@@ -3,14 +3,6 @@
 # ServiceAccount of the gateway pods. No automatic token: the gateway pod template projects one
 # (1 h, rotated by the kubelet) only while hosted.enabled. Its ONLY permissions are the Role below,
 # bound in the hosted namespace; it has no rights in the release namespace or cluster-wide.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: {{ include "platform.gatewayServiceAccount" . }}
-  labels:
-    {{- include "platform.labels" (dict "ctx" $ "component" "gateway") | nindent 4 }}
-automountServiceAccountToken: false
----
 # The identity hosted pods run as: no token, no RoleBinding, no permissions at all.
 apiVersion: v1
 kind: ServiceAccount

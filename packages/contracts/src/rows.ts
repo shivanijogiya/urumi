@@ -46,6 +46,8 @@ export interface UpstreamRow {
   last_ok_at: Date | null;
   /** Created for a hosted server (006_hosted.sql): managed via /api/hosted-servers only. */
   hosted: boolean;
+  /** The woo-mcp of a provisioned store (007_stores.sql): managed via /api/stores only. */
+  store: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -66,6 +68,21 @@ export interface HostedServerRow {
   desired_state: 'present' | 'absent';
   phase: 'deploying' | 'connected' | 'unreachable' | 'failed' | 'deleting';
   reason: string | null;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  last_reconciled_at: Date | null;
+}
+
+/** A provisioned WooCommerce store (007_stores.sql, ADR 015). id = its upstream row's id. */
+export interface StoreRow {
+  id: string;
+  admin_email: string;
+  desired_state: 'present' | 'absent';
+  phase: 'provisioning' | 'ready' | 'failed' | 'deleting';
+  reason: string | null;
+  generation: number;
+  provision_started_at: Date;
   created_by: string | null;
   created_at: Date;
   updated_at: Date;

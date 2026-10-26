@@ -348,6 +348,63 @@ hosted:
     limits.cpu: '3'
     limits.memory: 1536Mi
 
+# Multiple stores (brief bonus; docs/adr/015-multi-store.md): admins create and delete extra
+# WooCommerce stores from the dashboard (Stores page / POST /api/stores). The gateway provisions each
+# in its own namespace `store-<slug>` (Pod Security restricted, ResourceQuota + LimitRange, default
+# deny NetworkPolicies, MariaDB, WordPress, the bootstrap Job from files/bootstrap, woo-mcp, an
+# Ingress for <slug>.<domainSuffix>) and registers its woo-mcp as the upstream `<slug>`. Stores are
+# runtime objects owned by the gateway, NOT by this release: helm upgrade/rollback leaves them alone.
+# RBAC (templates/stores/rbac.yaml): a ClusterRole for namespaces + creating RoleBindings that may
+# only reference the two ClusterRoles below (`bind` with resourceNames), and a ValidatingAdmission-
+# Policy that confines both to `store-*` namespaces carrying the store label. Off by default.
+multiStore:
+  enabled: false
+  # Most stores at once (deleting ones count until gone). Creation beyond it gets a clear 400.
+  maxStores: 3
+  # Storefronts: <scheme>://<slug>.<domainSuffix> (a wildcard DNS name pointing at the ingress).
+  domainSuffix: store.localtest.me
+  scheme: http
+  # https only: an existing TLS Secret of that name must exist in each store namespace (not managed).
+  tlsSecretName: ''
+  # A store not ready after this many minutes is Failed with the step it was stuck on (Retry).
+  provisionTimeoutMinutes: 10
+  # ValidatingAdmissionPolicy (Kubernetes >= 1.30) that limits the gateway's cluster-wide rights to
+  # store namespaces. Keep it on; without it the gateway could create/delete ANY namespace.
+  admissionPolicy:
+    enabled: true
+  persistence:
+    storageClass: ''
+    mariadb: 1Gi
+    wordpress: 1Gi
+  # Small on purpose (one extra store must fit next to the platform on an 8 GB laptop).
+  resources:
+    mariadb:
+      requests: { cpu: 25m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 320Mi }
+    wordpress:
+      requests: { cpu: 25m, memory: 96Mi }
+      limits: { cpu: '1', memory: 384Mi }
+    wooMcp:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+    wpCli:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: '1', memory: 512Mi }
+    kubectl:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }
+  # Per store namespace, whatever the gateway asks for.
+  quota:
+    pods: '6'
+    requests.cpu: 300m
+    requests.memory: 512Mi
+    limits.cpu: '3'
+    limits.memory: 1536Mi
+    persistentvolumeclaims: '2'
+    requests.storage: 4Gi
+    services.nodeports: '0'
+    services.loadbalancers: '0'
+
 # NetworkPolicies (brief item 6; docs/adr/009-network-policies.md, templates/networkpolicy/):
 # a namespace-wide default deny for ingress AND egress, plus an allow policy per real flow
 # (Traefik -> dashboard/gateway/WordPress; gateway -> Postgres, woo-mcp, everything, internet
