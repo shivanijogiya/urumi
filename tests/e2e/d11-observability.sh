@@ -23,8 +23,9 @@ KCTX=${KUBE_CONTEXT:-k3d-urumi}
 k() { kubectl --context "$KCTX" -n "$NS" "$@"; }
 SEL="app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=gateway"
 PORT=9464
-SCRAPER="d11-scraper-$RUN_ID"
-OUTSIDER="d11-outsider-$RUN_ID"
+SUFFIX=$(date +%s)
+SCRAPER="d11-scraper-$SUFFIX"
+OUTSIDER="d11-outsider-$SUFFIX"
 KEY="$E2E_OUT/d11.key"
 key_id=""
 
@@ -39,9 +40,9 @@ trap cleanup EXIT
 image=$(k get deploy "$RELEASE-gateway" -o jsonpath='{.spec.template.spec.containers[0].image}')
 [ -n "$image" ] || fail "cannot read the gateway image"
 start_pod() { # start_pod <name> [label]
-  local labels=()
-  [ -n "${2:-}" ] && labels=(--labels "$2")
-  k run "$1" --image "$image" --image-pull-policy IfNotPresent --restart Never "${labels[@]}" \
+  # macOS bash 3.2: no empty arrays under set -u; a harmless default label instead.
+  k run "$1" --image "$image" --image-pull-policy IfNotPresent --restart Never \
+    --labels "${2:-urumi.io/e2e=d11}" \
     --overrides '{"spec":{"automountServiceAccountToken":false,"containers":[{"name":"'"$1"'","image":"'"$image"'","command":["sleep","300"],"resources":{"requests":{"cpu":"5m","memory":"16Mi"},"limits":{"cpu":"100m","memory":"64Mi"}},"securityContext":{"runAsNonRoot":true,"runAsUser":1000,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' \
     >/dev/null || fail "kubectl run $1 failed"
 }
