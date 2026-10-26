@@ -10,12 +10,13 @@ import { api } from '../api.js';
 import { useCurrentUser } from '../auth.js';
 import { ToolList } from '../components/ToolList.js';
 import { Badge, ErrorText, formatTime } from '../components/ui.js';
+import { HostedForm, HostedServers } from './HostedServers.js';
 
 const UPSTREAMS_KEY = ['upstreams'] as const;
 
 export function Upstreams() {
   const isAdmin = useCurrentUser().role === 'admin';
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<false | 'remote' | 'hosted'>(false);
   // Matches the gateway's health-check cadence, so each refresh can show a new check.
   const upstreams = useQuery({
     queryKey: UPSTREAMS_KEY,
@@ -28,7 +29,7 @@ export function Upstreams() {
       <div className="page-head">
         <h1>Upstreams</h1>
         {isAdmin && !adding && (
-          <button type="button" onClick={() => setAdding(true)}>
+          <button type="button" onClick={() => setAdding('remote')}>
             Add upstream
           </button>
         )}
@@ -36,7 +37,33 @@ export function Upstreams() {
       <p className="muted">
         Status refreshes every {MCP_TIMEOUTS.healthIntervalMs / 1000} seconds.
       </p>
-      {adding && <UpstreamForm onDone={() => setAdding(false)} />}
+      {adding && (
+        <div className="row" role="radiogroup" aria-label="Upstream kind">
+          <label className="checkbox">
+            <input
+              type="radio"
+              name="upstream-kind"
+              checked={adding === 'remote'}
+              onChange={() => setAdding('remote')}
+            />
+            Remote (URL)
+          </label>
+          <label className="checkbox">
+            <input
+              type="radio"
+              name="upstream-kind"
+              checked={adding === 'hosted'}
+              onChange={() => setAdding('hosted')}
+            />
+            Hosted (container image)
+          </label>
+        </div>
+      )}
+      {adding === 'remote' && <UpstreamForm onDone={() => setAdding(false)} />}
+      {adding === 'hosted' && <HostedForm onDone={() => setAdding(false)} />}
+      {isAdmin && (adding === 'hosted' || upstreams.data?.some((u) => u.hosted)) && (
+        <HostedServers />
+      )}
       {upstreams.isPending && <p>Loading…</p>}
       <ErrorText error={upstreams.error} />
       {upstreams.data &&
@@ -81,7 +108,8 @@ export function UpstreamSummary({
     <>
       <td>
         <strong>{u.name}</strong> <code>{u.slug}</code>
-        {!u.enabled && <span className="tag">disabled</span>}
+        {u.hosted && <span className="tag">hosted</span>}
+        {!u.enabled && <span className="tag">{u.hosted ? 'not registered yet' : 'disabled'}</span>}
       </td>
       <td>
         <Badge value={u.status} />
@@ -123,7 +151,7 @@ function UpstreamRow({ upstream: u, isAdmin }: { upstream: Upstream; isAdmin: bo
           >
             {expanded ? 'Hide tools' : 'Show tools'}
           </button>
-          {isAdmin && (
+          {isAdmin && !u.hosted && (
             <>
               <button type="button" className="secondary" onClick={() => setEditing(!editing)}>
                 Edit

@@ -387,6 +387,19 @@ tr.revoked td {
   color: var(--danger);
 }
 
+.badge-hosted-connected {
+  background: #dcf5e4;
+  color: var(--ok);
+}
+
+.badge-hosted-failed,
+.badge-hosted-unreachable {
+  background: #fde4e1;
+  color: var(--danger);
+}
+
+.badge-hosted-deploying,
+.badge-hosted-deleting,
 .badge-timeout,
 .badge-rate_limited {
   background: #fdf1d3;

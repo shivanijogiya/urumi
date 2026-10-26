@@ -16,8 +16,8 @@ export function formatTime(iso: string | null): string {
 }
 
 /** Status (up/down/unknown) or outcome (ok/error/timeout/denied/rate_limited) pill. */
-export function Badge({ value }: { value: string }) {
-  return <span className={`badge badge-${value}`}>{value}</span>;
+export function Badge({ value, label }: { value: string; label?: string }) {
+  return <span className={`badge badge-${value}`}>{label ?? value}</span>;
 }
 
 // navigator.clipboard needs a secure context; plain-http deployments fall back to execCommand.

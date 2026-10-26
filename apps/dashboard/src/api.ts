@@ -11,7 +11,10 @@ import {
   ConnectedAppListResponseSchema,
   CreateKeyRequestSchema,
   CreateKeyResponseSchema,
+  CreateHostedServerRequestSchema,
   CreateUpstreamRequestSchema,
+  HostedServerListResponseSchema,
+  HostedServerResponseSchema,
   CreateUserRequestSchema,
   CreateUserResponseSchema,
   ErrorEnvelopeSchema,
@@ -34,6 +37,7 @@ import {
   type AuditQuery,
   type ChatRequest,
   type ChangePasswordRequest,
+  type CreateHostedServerRequest,
   type CreateUpstreamRequest,
   type CreateUserRequest,
   type ErrorCode,
@@ -249,6 +253,20 @@ export const api = {
     }).then((r) => r.upstream),
   deleteUpstream: async (id: string) =>
     request(routePath(ROUTES.deleteUpstream.path, { id }), {
+      method: 'DELETE',
+      schema: undefined,
+    }),
+  // Hosted MCP servers (ADR 014), admin only. Env values go out once and never come back.
+  listHostedServers: async () =>
+    request(ROUTES.listHostedServers.path, { schema: HostedServerListResponseSchema }),
+  createHostedServer: async (body: CreateHostedServerRequest) =>
+    request(ROUTES.createHostedServer.path, {
+      method: 'POST',
+      body: checked(CreateHostedServerRequestSchema, body),
+      schema: HostedServerResponseSchema,
+    }).then((r) => r.server),
+  deleteHostedServer: async (id: string) =>
+    request(routePath(ROUTES.deleteHostedServer.path, { id }), {
       method: 'DELETE',
       schema: undefined,
     }),
