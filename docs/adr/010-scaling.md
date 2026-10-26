@@ -94,4 +94,10 @@ so two pods fit where one did on an 8 GB laptop.
   request on that pod; the client must retry it. D10 uses a graceful delete, as a rollout or
   node drain does.
 - Migration `003_scaling.sql` is additive (two tables, a wider `CHECK`), so the previous image
-  still runs on the new schema (rollback rule in DESIGN §12).
+  still runs on the new schema (rollback rule in DESIGN §12). **Rollback caveat:** the previous
+  dashboard validates `/api/audit` responses with an outcome enum that lacks `rate_limited`, so
+  after rolling back below this release its Audit page errors on any page that contains a
+  rate-limited row (the gateway API, filters by user/server, and D1–D8 are unaffected). Filter
+  the page (e.g. by outcome or user), or keep the rows' meaning and relabel them before the
+  rollback: `UPDATE audit_log SET outcome = 'denied' WHERE outcome = 'rate_limited'`
+  (`error_code` stays `RATE_LIMITED`).

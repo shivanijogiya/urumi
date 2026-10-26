@@ -344,6 +344,9 @@ What is safe, in short (details and the reasoning: [`docs/DESIGN.md`](docs/DESIG
 - **Gateway migrations are forward-only and additive** (`packages/contracts/sql/`, applied on
   start under an advisory lock), so the previous gateway image still runs on the newer schema.
   Never ship a migration that drops or renames something the previous release reads.
+  Known exception (ADR 010): a release with the `rate_limited` audit outcome, rolled back to one
+  without it, leaves the old dashboard's Audit page unable to render pages containing such rows;
+  ADR 010 gives the one-line relabel.
 - **The bootstrap hook** (`post-install,post-upgrade`) re-runs on every upgrade and is idempotent:
   it keeps a still-working Application Password. It does **not** run on `helm rollback`.
 - **Immutable fields** (StatefulSet `volumeClaimTemplates` sizes, selectors) cannot change through
