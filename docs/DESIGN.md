@@ -97,7 +97,8 @@ and results only as `tool_result` blocks.
 
 ## 3. Data model
 
-`packages/contracts/sql/001_init.sql` and `002_tool_permissions.sql` (ADR 008), applied on gateway start by
+`packages/contracts/sql/001_init.sql` … `007_stores.sql` (one file per feature: tool permissions,
+scaling, observability, OAuth, hosted servers, stores), applied on gateway start by
 `apps/gateway/src/db/migrate.ts` (advisory lock, `schema_migrations` table, idempotent).
 
 ```mermaid
@@ -145,7 +146,7 @@ erDiagram
     text tool
     timestamptz started_at
     integer duration_ms
-    text outcome "ok | error | timeout | denied"
+    text outcome "ok | error | timeout | denied | rate_limited"
     text error_code
   }
 ```
@@ -447,8 +448,11 @@ and `values-prod.yaml` (README "Local → VPS").
   may only reference two chart-defined ClusterRoles (`bind` by name), confined to `store-*`
   namespaces by a ValidatingAdmissionPolicy; checked by `tests/infra/stores-chart.sh`, proved by
   D15. Stores are runtime objects: Helm upgrades and rollbacks do not touch them (ADR 015).
-- **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
-  in-cluster upstreams pass the private-address check.
+- **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to exactly the chart's in-cluster
+  upstream Services (`<release>-woo-mcp` and `<release>-everything` in the namespace,
+  `templates/gateway/_pod.tpl`), so they pass the private-address check while Postgres, MariaDB
+  and WordPress stay blocked. Hosted and store upstream rows may reach only their own computed
+  Service host.
 
 ## 11. Tradeoffs and what we would do with more time
 
@@ -467,8 +471,8 @@ With more time: terminate upstream MCP sessions (`DELETE`) after each operation;
 response bodies before parsing; audit admin actions; move the chat limit and login throttle to
 the shared token buckets;
 append-only audit role in Postgres; per-API-key scopes;
-confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; image
-build + e2e in CI; a real VPS run (#25).
+confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; the
+e2e flows in CI (images are already built and pushed by CI); a real VPS run (#25).
 
 **Known gap: upstream sessions are not terminated.** ADR 002 measured that server-everything
 keeps every un-terminated session in memory (≈ 0.06 MiB each) and expected the fix in the

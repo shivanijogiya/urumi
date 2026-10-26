@@ -1,6 +1,6 @@
 # ADR 011 — Observability: Prometheus metrics on an internal port, failure reasons, Health page
 
-Status: proposed (needs Aadi: new dependency `prom-client`, new port/Service/NetworkPolicy, new
+Status: accepted, merged to `main` (was proposed: needs Aadi: new dependency `prom-client`, new port/Service/NetworkPolicy, new
 admin API) · Brief stand-out item 8 ("Observability") · Builds on ADR 010 (several replicas)
 
 ## Context

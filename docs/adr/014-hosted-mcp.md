@@ -1,6 +1,6 @@
 # ADR 014 — Hosted MCP servers (the gateway runs admin-added container images)
 
-Status: proposed (G3: new namespace, RBAC for the gateway, NetworkPolicies, a Kubernetes-API
+Status: accepted, merged to `main` (was proposed: G3: new namespace, RBAC for the gateway, NetworkPolicies, a Kubernetes-API
 egress rule; needs Aadi) · Brief stand-out item 5 ("Hosted MCP servers") · Builds on ADR 002
 (upstream registry, SSRF guard, secretbox), 008 (tool permissions), 009 (default-deny
 NetworkPolicies), 010 (replicas, Postgres leases)

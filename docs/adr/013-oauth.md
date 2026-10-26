@@ -1,6 +1,6 @@
 # ADR 013 — OAuth 2.1 sign-in for MCP clients (the gateway as Authorization Server)
 
-Status: proposed (needs Aadi: new public endpoints on the app host, new tables, a second way to
+Status: accepted, merged to `main` (was proposed: needs Aadi: new public endpoints on the app host, new tables, a second way to
 authenticate /mcp) · Brief stand-out item 3 ("OAuth on the gateway") · Builds on ADR 008
 (permissions), 010 (replicas, Postgres buckets), 012 (discovery mode)
 

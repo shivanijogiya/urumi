@@ -1,6 +1,6 @@
 # ADR 015 — Multiple stores (the gateway provisions WooCommerce stores at runtime)
 
-Status: proposed (G3: cluster-scoped RBAC for the gateway, a ValidatingAdmissionPolicy, new
+Status: accepted, merged to `main` (was proposed: G3: cluster-scoped RBAC for the gateway, a ValidatingAdmissionPolicy, new
 NetworkPolicies and per-store namespaces; needs Aadi) · Brief bonus "multi-store" · Builds on ADR
 002 (upstream registry, SSRF guard, secretbox), 008 (tool permissions), 009 (default-deny
 NetworkPolicies), 010 (replicas, Postgres leases), 014 (hosted MCP servers: Kubernetes client,

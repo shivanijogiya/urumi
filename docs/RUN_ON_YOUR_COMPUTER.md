@@ -118,13 +118,15 @@ Without a GitLab token:
 E2E_SKIP_GITLAB=1 tests/e2e/run.sh seed
 ```
 
-With a GitLab token in `.env.local`, run all eight demo checks instead:
+With a GitLab token in `.env.local`, run all the demo checks instead:
 
 ```sh
-tests/e2e/run.sh all       # prints PASS seed, PASS D1 … PASS D8
+tests/e2e/run.sh all       # prints PASS seed, PASS D1 … PASS D15
 ```
 
-Without the GitLab token, D3 and D4 expect the GitLab server and will fail; that is expected.
+Without the GitLab token, `run.sh all` stops at the seed (it expects all three tool servers); use
+`E2E_SKIP_GITLAB=1 tests/e2e/run.sh all`, and D3 (which lists the GitLab tools) fails, as
+expected. Without the Anthropic key, the chat checks D2, D4 and D12 fail.
 
 ### 6. Open it
 
@@ -139,7 +141,7 @@ See your logins: `grep -E '^(WP_ADMIN|SEED_ADMIN)_' .env.local`
 Things to try in the dashboard: **Upstreams** (the tool servers and whether they are up),
 **Members** (add users), **My keys** (make an API key for an AI app), **Chat** ("What orders came
 in today?"), **Audit** (every tool call, who made it, and whether it worked). The README's
-[demo walkthrough](../README.md#demo-walkthrough-manual-d1d8) has the full tour.
+[demo walkthrough](../README.md#demo-walkthrough-manual-d1d9) has the full tour.
 
 ## Stop, restart, remove
 

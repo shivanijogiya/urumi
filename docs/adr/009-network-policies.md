@@ -1,6 +1,6 @@
 # ADR 009 — Default-deny NetworkPolicies and a non-root WordPress
 
-Status: proposed (G3: NetworkPolicy + securityContext changes; needs Aadi) · Brief stand-out item 6
+Status: accepted, merged to `main` (was proposed: G3: NetworkPolicy + securityContext changes; needs Aadi) · Brief stand-out item 6
 ("NetworkPolicies that deny by default, and containers that run as non-root") · Amends DESIGN §10,
 THREAT_MODEL 3.4 / 3.7
 
