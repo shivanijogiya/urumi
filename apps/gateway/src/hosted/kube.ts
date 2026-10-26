@@ -207,7 +207,8 @@ export async function kubeRequest(
         let size = 0;
         res.on('data', (c: Buffer) => {
           size += c.length;
-          if (size > MAX_BODY_BYTES) r.destroy(new KubeError(0, 'Kubernetes API response too large'));
+          if (size > MAX_BODY_BYTES)
+            r.destroy(new KubeError(0, 'Kubernetes API response too large'));
           else chunks.push(c);
         });
         res.on('end', () => {

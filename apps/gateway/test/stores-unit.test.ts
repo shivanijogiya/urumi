@@ -12,61 +12,8 @@ import {
   type StoreSpec,
 } from '../src/stores/manifests.js';
 import { storeServiceHost, storeUpstreamUrl } from '../src/stores/names.js';
-import { StoreSettingsSchema, type StoreSettings } from '../src/stores/settings.js';
+import { SETTINGS } from './helpers/store-settings.js';
 import { deriveStorePhase, type StoreObservation } from '../src/stores/status.js';
-
-export const SETTINGS: StoreSettings = StoreSettingsSchema.parse({
-  domainSuffix: 'store.localtest.me',
-  scheme: 'http',
-  environmentType: 'local',
-  woocommerce: { version: '11.0.1', currency: 'INR', defaultCountry: 'IN:DL' },
-  apiUser: 'woo-mcp',
-  images: {
-    wordpress: { image: 'wordpress:6-php8.3-apache' },
-    mariadb: { image: 'mariadb:11.4' },
-    wpCli: { image: 'wordpress:cli-2.12.0-php8.3' },
-    kubectl: { image: 'alpine/k8s:1.35.9' },
-    wooMcp: { image: 'k3d-urumi-registry.localhost:5005/urumi-woo-mcp:dev', pullPolicy: 'Always' },
-  },
-  storageClass: 'local-path',
-  storage: { mariadb: '1Gi', wordpress: '1Gi' },
-  resources: {
-    mariadb: { requests: { cpu: '25m', memory: '128Mi' }, limits: { cpu: '500m', memory: '320Mi' } },
-    wordpress: { requests: { cpu: '25m', memory: '96Mi' }, limits: { cpu: '1', memory: '384Mi' } },
-    wooMcp: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '200m', memory: '128Mi' } },
-    wpCli: { requests: { cpu: '50m', memory: '96Mi' }, limits: { cpu: '1', memory: '512Mi' } },
-    kubectl: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '200m', memory: '128Mi' } },
-  },
-  quota: {
-    pods: '6',
-    'requests.cpu': '300m',
-    'requests.memory': '512Mi',
-    'limits.cpu': '3',
-    'limits.memory': '1536Mi',
-    persistentvolumeclaims: '2',
-    'requests.storage': '4Gi',
-    'services.nodeports': '0',
-    'services.loadbalancers': '0',
-  },
-  network: {
-    gatewayNamespace: 'urumi',
-    gatewayPodSelector: {
-      matchLabels: { 'app.kubernetes.io/instance': 'urumi' },
-      matchExpressions: [{ key: 'app.kubernetes.io/component', operator: 'In', values: ['gateway'] }],
-    },
-    ingressNamespace: 'kube-system',
-    ingressPodLabels: { 'app.kubernetes.io/name': 'traefik' },
-    dnsNamespace: 'kube-system',
-    dnsPodLabels: { 'k8s-app': 'kube-dns' },
-    kubeApi: { cidr: '0.0.0.0/0', ports: [443, 6443] },
-    internet: {
-      ports: [80, 443],
-      except: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', '127.0.0.0/8'],
-    },
-  },
-  clusterRoles: { manager: 'urumi-store-manager', bootstrap: 'urumi-store-bootstrap' },
-  gatewayServiceAccount: { name: 'urumi-gateway', namespace: 'urumi' },
-});
 
 export const SHARED = 'store-shared-secret-value-5b9d0c1e2f3a4b5c6d7e';
 const SPEC: StoreSpec = {
@@ -107,8 +54,7 @@ type Container = {
   resources: { requests: Record<string, string>; limits: Record<string, string> };
   volumeMounts?: { name: string }[];
 };
-const podSpecOf = (o: StoreObject) =>
-  (o.spec as { template: { spec: PodSpec } }).template.spec;
+const podSpecOf = (o: StoreObject) => (o.spec as { template: { spec: PodSpec } }).template.spec;
 
 describe('store manifests', () => {
   const m = buildStoreManifests(SPEC, SETTINGS);
@@ -143,7 +89,11 @@ describe('store manifests', () => {
     type Rule = { from?: Peer[]; to?: Peer[]; ports?: { port: number }[] };
     const flows: string[] = [];
     for (const np of byKind(objs, 'NetworkPolicy')) {
-      const spec = np.spec as { podSelector: { matchLabels?: Record<string, string> }; ingress?: Rule[]; egress?: Rule[] };
+      const spec = np.spec as {
+        podSelector: { matchLabels?: Record<string, string> };
+        ingress?: Rule[];
+        egress?: Rule[];
+      };
       const self = spec.podSelector.matchLabels?.['app.kubernetes.io/component'] ?? '*';
       for (const [dir, rules] of [
         ['in', spec.ingress ?? []],
@@ -154,7 +104,9 @@ describe('store manifests', () => {
             const ns = p.namespaceSelector?.matchLabels['kubernetes.io/metadata.name'];
             if (p.namespaceSelector) {
               // Never a selector that could match another store namespace (e.g. by the store label).
-              expect(Object.keys(p.namespaceSelector.matchLabels)).toEqual(['kubernetes.io/metadata.name']);
+              expect(Object.keys(p.namespaceSelector.matchLabels)).toEqual([
+                'kubernetes.io/metadata.name',
+              ]);
               expect(['urumi', 'kube-system']).toContain(ns);
             }
             if (p.ipBlock) {
@@ -170,7 +122,9 @@ describe('store manifests', () => {
                 ? `${ns}/${JSON.stringify(p.podSelector)}`
                 : p.podSelector?.matchLabels?.['app.kubernetes.io/component'];
             const ports = (r.ports ?? []).map((x) => x.port).join('+');
-            flows.push(dir === 'in' ? `${other} -> ${self}:${ports}` : `${self} -> ${other}:${ports}`);
+            flows.push(
+              dir === 'in' ? `${other} -> ${self}:${ports}` : `${self} -> ${other}:${ports}`,
+            );
           }
         }
       }
@@ -202,14 +156,28 @@ describe('store manifests', () => {
   });
 
   it('two stores never reference each other', () => {
-    const other = all(buildStoreManifests({ ...SPEC, id: '99999999-2222-4333-8444-555555555555', slug: 'shop3' }, SETTINGS));
+    const other = all(
+      buildStoreManifests(
+        { ...SPEC, id: '99999999-2222-4333-8444-555555555555', slug: 'shop3' },
+        SETTINGS,
+      ),
+    );
     expect(JSON.stringify(other)).not.toContain('shop2');
     expect(JSON.stringify(objs)).not.toContain('shop3');
   });
 
   it('hardens every pod: non-root, no capabilities, seccomp, no host namespaces, resources set', () => {
-    const workloads = [...byKind(objs, 'StatefulSet'), ...byKind(objs, 'Deployment'), ...byKind(objs, 'Job')];
-    expect(workloads.map((w) => w.metadata.name).sort()).toEqual(['bootstrap-g1', 'mariadb', 'woo-mcp', 'wordpress']);
+    const workloads = [
+      ...byKind(objs, 'StatefulSet'),
+      ...byKind(objs, 'Deployment'),
+      ...byKind(objs, 'Job'),
+    ];
+    expect(workloads.map((w) => w.metadata.name).sort()).toEqual([
+      'bootstrap-g1',
+      'mariadb',
+      'woo-mcp',
+      'wordpress',
+    ]);
     for (const w of workloads) {
       const pod = podSpecOf(w);
       expect(pod.automountServiceAccountToken, w.metadata.name).toBe(false);
@@ -244,9 +212,13 @@ describe('store manifests', () => {
       subjects: { kind: string; name: string; namespace: string }[];
     })[];
     expect(gw!.roleRef).toMatchObject({ kind: 'ClusterRole', name: 'urumi-store-manager' });
-    expect(gw!.subjects).toEqual([{ kind: 'ServiceAccount', name: 'urumi-gateway', namespace: 'urumi' }]);
+    expect(gw!.subjects).toEqual([
+      { kind: 'ServiceAccount', name: 'urumi-gateway', namespace: 'urumi' },
+    ]);
     expect(boot!.roleRef).toMatchObject({ kind: 'ClusterRole', name: 'urumi-store-bootstrap' });
-    expect(boot!.subjects).toEqual([{ kind: 'ServiceAccount', name: 'store-bootstrap', namespace: 'store-shop2' }]);
+    expect(boot!.subjects).toEqual([
+      { kind: 'ServiceAccount', name: 'store-bootstrap', namespace: 'store-shop2' },
+    ]);
   });
 
   it('caps the namespace with a ResourceQuota and a LimitRange', () => {
@@ -265,18 +237,26 @@ describe('store manifests', () => {
   it('the requests of all store pods fit in the quota', () => {
     const mi = (v: string) => (v.endsWith('Gi') ? parseFloat(v) * 1024 : parseFloat(v));
     const r = SETTINGS.resources;
-    const steady = [r.mariadb, r.wordpress, r.wooMcp].reduce((a, x) => a + mi(x.requests.memory), 0);
+    const steady = [r.mariadb, r.wordpress, r.wooMcp].reduce(
+      (a, x) => a + mi(x.requests.memory),
+      0,
+    );
     const job = Math.max(mi(r.wpCli.requests.memory), mi(r.kubectl.requests.memory));
     expect(steady + job).toBeLessThanOrEqual(mi(SETTINGS.quota['requests.memory']!));
     const lim = [r.mariadb, r.wordpress, r.wooMcp].reduce((a, x) => a + mi(x.limits.memory), 0);
-    expect(lim + mi(r.wpCli.limits.memory)).toBeLessThanOrEqual(mi(SETTINGS.quota['limits.memory']!));
+    expect(lim + mi(r.wpCli.limits.memory)).toBeLessThanOrEqual(
+      mi(SETTINGS.quota['limits.memory']!),
+    );
   });
 
   it('exposes the storefront on <slug>.<suffix> and wires WordPress to it', () => {
     const ing = byKind(objs, 'Ingress')[0]!;
     expect(JSON.stringify(ing.spec)).toContain('"host":"shop2.store.localtest.me"');
-    expect(JSON.stringify(podSpecOf(byKind(objs, 'Deployment').find((d) => d.metadata.name === 'wordpress')!)))
-      .toContain("define('WP_HOME', 'http://shop2.store.localtest.me');");
+    expect(
+      JSON.stringify(
+        podSpecOf(byKind(objs, 'Deployment').find((d) => d.metadata.name === 'wordpress')!),
+      ),
+    ).toContain("define('WP_HOME', 'http://shop2.store.localtest.me');");
   });
 
   it('keeps secrets out of everything but the shared-secret Secret, and out of the hash', () => {
@@ -285,7 +265,10 @@ describe('store manifests', () => {
     const nonSecret = objs.filter((o) => o.kind !== 'Secret');
     expect(JSON.stringify(nonSecret)).not.toContain(SHARED);
     expect(JSON.stringify(nonSecret)).not.toContain(Buffer.from(SHARED).toString('base64'));
-    const rotated = buildStoreManifests({ ...SPEC, sharedSecret: 'another-secret-value-0000000000000000' }, SETTINGS);
+    const rotated = buildStoreManifests(
+      { ...SPEC, sharedSecret: 'another-secret-value-0000000000000000' },
+      SETTINGS,
+    );
     expect(rotated.specHash).toBe(m.specHash);
     const renamed = buildStoreManifests({ ...SPEC, generation: 2 }, SETTINGS);
     expect(renamed.specHash).not.toBe(m.specHash);
@@ -297,7 +280,10 @@ describe('store manifests', () => {
     const b = generatedSecrets(SPEC);
     expect(a.map((s) => s.metadata.name)).toEqual(['store-db', 'store-admin']);
     expect(JSON.stringify(a[0]!.data)).not.toBe(JSON.stringify(b[0]!.data));
-    const pw = Buffer.from((a[0]!.data as Record<string, string>).MARIADB_PASSWORD!, 'base64').toString();
+    const pw = Buffer.from(
+      (a[0]!.data as Record<string, string>).MARIADB_PASSWORD!,
+      'base64',
+    ).toString();
     expect(pw.length).toBeGreaterThanOrEqual(24);
   });
 
@@ -331,7 +317,8 @@ describe('store slug validation', () => {
     expect(StoreSlugSchema.safeParse(s).success).toBe(false);
   });
   it('reserves the built-in upstreams and platform names', () => {
-    for (const s of ['gateway', 'woo', 'everything', 'default']) expect(RESERVED_STORE_SLUGS).toContain(s);
+    for (const s of ['gateway', 'woo', 'everything', 'default'])
+      expect(RESERVED_STORE_SLUGS).toContain(s);
   });
   it('requires a name and an admin email, nothing else', () => {
     const ok = { slug: 'shop2', name: 'Shop', adminEmail: 'A@Example.com' };
@@ -343,7 +330,15 @@ describe('store slug validation', () => {
 
 describe('store Kubernetes client guard', () => {
   it('refuses any namespace that is not a store namespace', () => {
-    for (const ns of ['urumi', 'kube-system', 'default', 'urumi-hosted', 'store-', 'store-UP', 'xstore-a1']) {
+    for (const ns of [
+      'urumi',
+      'kube-system',
+      'default',
+      'urumi-hosted',
+      'store-',
+      'store-UP',
+      'xstore-a1',
+    ]) {
       expect(() => assertStoreNamespace(ns)).toThrow(KubeError);
     }
     expect(assertStoreNamespace('store-shop2')).toBe('store-shop2');
@@ -419,7 +414,12 @@ describe('store phase state machine', () => {
       pods: [
         pod('mariadb', {
           conditions: [
-            { type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: 'pod has unbound immediate PersistentVolumeClaims' },
+            {
+              type: 'PodScheduled',
+              status: 'False',
+              reason: 'Unschedulable',
+              message: 'pod has unbound immediate PersistentVolumeClaims',
+            },
           ],
         }),
       ],
@@ -435,26 +435,59 @@ describe('store phase state machine', () => {
       deriveStorePhase({
         ...base,
         wooMcp: null,
-        pods: [pod('woo-mcp', { containerStatuses: [{ name: 'woo-mcp', state: { waiting: { reason: 'ImagePullBackOff' } } }] })],
+        pods: [
+          pod('woo-mcp', {
+            containerStatuses: [
+              { name: 'woo-mcp', state: { waiting: { reason: 'ImagePullBackOff' } } },
+            ],
+          }),
+        ],
       }),
-    ).toEqual({ phase: 'failed', reason: 'woo-mcp: ImagePullBackOff: the image could not be pulled' });
+    ).toEqual({
+      phase: 'failed',
+      reason: 'woo-mcp: ImagePullBackOff: the image could not be pulled',
+    });
     const jobFailed = deriveStorePhase({
       ...base,
       job: {
         metadata: { name: 'bootstrap-g1' },
-        status: { failed: 3, conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded', message: 'Job has reached the specified backoff limit' }] },
+        status: {
+          failed: 3,
+          conditions: [
+            {
+              type: 'Failed',
+              status: 'True',
+              reason: 'BackoffLimitExceeded',
+              message: 'Job has reached the specified backoff limit',
+            },
+          ],
+        },
       },
     });
     expect(jobFailed.phase).toBe('failed');
-    expect(jobFailed.reason).toMatch(/^Bootstrap job failed \(BackoffLimitExceeded: .*kubectl logs job\/bootstrap-g1$/);
+    expect(jobFailed.reason).toMatch(
+      /^Bootstrap job failed \(BackoffLimitExceeded: .*kubectl logs job\/bootstrap-g1$/,
+    );
     const quota = deriveStorePhase({
       ...base,
       wordpress: {
         metadata: { name: 'wordpress' },
-        status: { conditions: [{ type: 'ReplicaFailure', status: 'True', reason: 'FailedCreate', message: 'exceeded quota: store-quota' }] },
+        status: {
+          conditions: [
+            {
+              type: 'ReplicaFailure',
+              status: 'True',
+              reason: 'FailedCreate',
+              message: 'exceeded quota: store-quota',
+            },
+          ],
+        },
       },
     });
-    expect(quota).toEqual({ phase: 'failed', reason: 'wordpress: FailedCreate: exceeded quota: store-quota' });
+    expect(quota).toEqual({
+      phase: 'failed',
+      reason: 'wordpress: FailedCreate: exceeded quota: store-quota',
+    });
   });
 
   it('tolerates a few crash restarts, fails after three', () => {
@@ -464,7 +497,14 @@ describe('store phase state machine', () => {
         mariadb: { metadata: { name: 'mariadb' }, status: { readyReplicas: 0 } },
         pods: [
           pod('mariadb', {
-            containerStatuses: [{ name: 'mariadb', restartCount, state: { waiting: { reason: 'CrashLoopBackOff' } }, lastState: { terminated: { reason: 'Error', exitCode: 1 } } }],
+            containerStatuses: [
+              {
+                name: 'mariadb',
+                restartCount,
+                state: { waiting: { reason: 'CrashLoopBackOff' } },
+                lastState: { terminated: { reason: 'Error', exitCode: 1 } },
+              },
+            ],
           }),
         ],
       });
@@ -489,10 +529,17 @@ describe('store phase state machine', () => {
 
   it('keeps ready sticky (later trouble is the upstream status) and reports deleting', () => {
     expect(
-      deriveStorePhase({ ...base, current: 'ready', wooMcp: null, upstream: { enabled: true, status: 'down', last_error: 'Connection refused' } }),
+      deriveStorePhase({
+        ...base,
+        current: 'ready',
+        wooMcp: null,
+        upstream: { enabled: true, status: 'down', last_error: 'Connection refused' },
+      }),
     ).toEqual({ phase: 'ready', reason: 'woo-mcp unreachable: Connection refused' });
     expect(deriveStorePhase({ ...base, desiredState: 'absent' }).phase).toBe('deleting');
-    expect(deriveStorePhase({ ...base, desiredState: 'absent', namespace: null }).reason).toBe('Removing the upstream');
+    expect(deriveStorePhase({ ...base, desiredState: 'absent', namespace: null }).reason).toBe(
+      'Removing the upstream',
+    );
   });
 
   it('ignores pods that are being deleted', () => {
@@ -500,8 +547,16 @@ describe('store phase state machine', () => {
       ...base,
       pods: [
         {
-          metadata: { name: 'old', deletionTimestamp: t0.toISOString(), labels: { 'app.kubernetes.io/component': 'woo-mcp' } },
-          status: { containerStatuses: [{ name: 'woo-mcp', state: { waiting: { reason: 'ErrImagePull' } } }] },
+          metadata: {
+            name: 'old',
+            deletionTimestamp: t0.toISOString(),
+            labels: { 'app.kubernetes.io/component': 'woo-mcp' },
+          },
+          status: {
+            containerStatuses: [
+              { name: 'woo-mcp', state: { waiting: { reason: 'ErrImagePull' } } },
+            ],
+          },
         },
       ],
     });

@@ -397,7 +397,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
           }
         : null,
     builtInStore: e.BUILTIN_STORE_URL
-      ? { name: e.BUILTIN_STORE_NAME, slug: 'woo', storefrontUrl: e.BUILTIN_STORE_URL.replace(/\/$/, '') }
+      ? {
+          name: e.BUILTIN_STORE_NAME,
+          slug: 'woo',
+          storefrontUrl: e.BUILTIN_STORE_URL.replace(/\/$/, ''),
+        }
       : null,
   };
 }

@@ -175,10 +175,13 @@ export class StoreProvisioner {
    * row, without the phase write (the lease holder owns that). Errors are left to the next tick.
    */
   async kickNow(row: StoreWithUpstream): Promise<void> {
+    const ns = storeNamespace(row.upstream.slug);
     if (row.desired_state === 'absent') {
-      await this.deps.kube.delete('Namespace', '', storeNamespace(row.upstream.slug));
+      await this.deps.kube.delete('Namespace', '', ns);
       return;
     }
+    // An old namespace of the same slug still terminating: the tick waits for it.
+    if ((await this.deps.kube.get('Namespace', '', ns))?.metadata.deletionTimestamp) return;
     await this.applyAll(row, this.manifestsFor(row));
   }
 
@@ -230,7 +233,10 @@ export class StoreProvisioner {
       const job = jobs.find((j) => j.metadata.name === bootstrapJobName(row.generation)) ?? null;
       let wooMcp = await k.get('Deployment', ns, N.wooMcp);
       // woo-mcp reads the Secret the Job writes: create (or restart, on a new generation) it after.
-      if ((job?.status?.succeeded ?? 0) >= 1 && (!wooMcp || drifted || row.phase === 'provisioning')) {
+      if (
+        (job?.status?.succeeded ?? 0) >= 1 &&
+        (!wooMcp || drifted || row.phase === 'provisioning')
+      ) {
         await k.apply(m.wooMcp);
         wooMcp = await k.get('Deployment', ns, N.wooMcp);
       }
@@ -271,7 +277,9 @@ export class StoreProvisioner {
       await this.setPhase(row, phase, reason);
     } catch (err) {
       const detail =
-        err instanceof KubeError ? err.detail : clip(`Provisioning error: ${(err as Error).message}`);
+        err instanceof KubeError
+          ? err.detail
+          : clip(`Provisioning error: ${(err as Error).message}`);
       this.deps.log.warn({ store: slug, reason: detail }, 'store reconcile failed');
       if (row.desired_state === 'present' && row.phase === 'provisioning') {
         // A rejected write (admission policy, quota, Pod Security, RBAC) is a failure the admin must
@@ -299,12 +307,22 @@ export class StoreProvisioner {
     }
     await deleteStoreRows(this.deps.pool, row.id, slug);
     this.deps.registry.invalidate(row.id);
-    this.deps.log.info({ store: slug }, 'store deleted: namespace gone, upstream and rules removed');
+    this.deps.log.info(
+      { store: slug },
+      'store deleted: namespace gone, upstream and rules removed',
+    );
   }
 
-  private async setPhase(row: StoreWithUpstream, phase: StoreWithUpstream['phase'], reason: string | null) {
+  private async setPhase(
+    row: StoreWithUpstream,
+    phase: StoreWithUpstream['phase'],
+    reason: string | null,
+  ) {
     if (phase !== row.phase || reason !== row.reason) {
-      this.deps.log.info({ store: row.upstream.slug, from: row.phase, to: phase, reason }, 'store phase');
+      this.deps.log.info(
+        { store: row.upstream.slug, from: row.phase, to: phase, reason },
+        'store phase',
+      );
     }
     await setStorePhase(this.deps.pool, row.id, phase, reason);
   }

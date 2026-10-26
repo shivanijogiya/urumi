@@ -112,7 +112,12 @@ export class HttpStoreKubeApi implements StoreKubeApi {
   private ca: Promise<Buffer> | undefined;
   constructor(private readonly opts: HttpStoreKubeOptions) {}
 
-  private call(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: string, ct?: string) {
+  private call(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    body?: string,
+    ct?: string,
+  ) {
     this.ca ??= readFile(`${this.opts.saDir ?? SA_DIR}/ca.crt`);
     return kubeRequest(
       { ...this.opts, ca: this.ca },
@@ -164,7 +169,11 @@ export class HttpStoreKubeApi implements StoreKubeApi {
     }
   }
 
-  async list(kind: StoreKind | 'Pod', namespace: string, labelSelector?: string): Promise<KubeItem[]> {
+  async list(
+    kind: StoreKind | 'Pod',
+    namespace: string,
+    labelSelector?: string,
+  ): Promise<KubeItem[]> {
     if (kind === 'Namespace') return this.listNamespaces(labelSelector ?? '');
     const q = labelSelector ? `?labelSelector=${encodeURIComponent(labelSelector)}` : '';
     const res = (await this.call('GET', `${collectionPath(kind, namespace)}${q}`)) as {

@@ -151,7 +151,12 @@ const nsPeer = (ns: string, podSelector: Record<string, unknown>) => ({
 });
 const tcp = (...p: number[]) => p.map((port) => ({ protocol: 'TCP', port }));
 
-function networkPolicies(spec: StoreSpec, s: StoreSettings, ns: string, labels: Record<string, string>) {
+function networkPolicies(
+  spec: StoreSpec,
+  s: StoreSettings,
+  ns: string,
+  labels: Record<string, string>,
+) {
   const net = s.network;
   const internet = {
     to: [{ ipBlock: { cidr: '0.0.0.0/0', except: [...net.internet.except] } }],
@@ -261,7 +266,11 @@ export function buildStoreManifests(spec: StoreSpec, s: StoreSettings): StoreMan
       apiVersion: 'rbac.authorization.k8s.io/v1',
       kind: 'RoleBinding',
       metadata: meta(N.gatewayBinding),
-      roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: s.clusterRoles.manager },
+      roleRef: {
+        apiGroup: 'rbac.authorization.k8s.io',
+        kind: 'ClusterRole',
+        name: s.clusterRoles.manager,
+      },
       subjects: [
         {
           kind: 'ServiceAccount',
@@ -446,8 +455,18 @@ export function buildStoreManifests(spec: StoreSpec, s: StoreSettings): StoreMan
               ports: [{ name: 'http', containerPort: 80 }],
               env: wordpressEnv(spec, s),
               startupProbe: { ...blank, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 60 },
-              readinessProbe: { ...blank, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 },
-              livenessProbe: { ...blank, periodSeconds: 20, timeoutSeconds: 5, failureThreshold: 6 },
+              readinessProbe: {
+                ...blank,
+                periodSeconds: 10,
+                timeoutSeconds: 3,
+                failureThreshold: 3,
+              },
+              livenessProbe: {
+                ...blank,
+                periodSeconds: 20,
+                timeoutSeconds: 5,
+                failureThreshold: 6,
+              },
               resources: structuredClone(r.wordpress),
               volumeMounts: [{ name: 'docroot', mountPath: '/var/www/html' }],
             },
@@ -557,7 +576,12 @@ export function buildStoreManifests(spec: StoreSpec, s: StoreSettings): StoreMan
                 defaultMode: 0o440,
                 sources: [
                   { serviceAccountToken: { path: 'token', expirationSeconds: 3600 } },
-                  { configMap: { name: 'kube-root-ca.crt', items: [{ key: 'ca.crt', path: 'ca.crt' }] } },
+                  {
+                    configMap: {
+                      name: 'kube-root-ca.crt',
+                      items: [{ key: 'ca.crt', path: 'ca.crt' }],
+                    },
+                  },
                   {
                     downwardAPI: {
                       items: [{ path: 'namespace', fieldRef: { fieldPath: 'metadata.namespace' } }],
@@ -603,10 +627,22 @@ export function buildStoreManifests(spec: StoreSpec, s: StoreSettings): StoreMan
                 secretEnv('WOO_URL', N.apiSecret),
                 secretEnv('WOO_USER', N.apiSecret),
                 secretEnv('WOO_APP_PASSWORD', N.apiSecret),
-                ...(s.forwardedProto ? [{ name: 'WOO_FORWARDED_PROTO', value: s.forwardedProto }] : []),
+                ...(s.forwardedProto
+                  ? [{ name: 'WOO_FORWARDED_PROTO', value: s.forwardedProto }]
+                  : []),
               ],
-              readinessProbe: { ...health, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 3 },
-              livenessProbe: { ...health, periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 },
+              readinessProbe: {
+                ...health,
+                periodSeconds: 5,
+                timeoutSeconds: 3,
+                failureThreshold: 3,
+              },
+              livenessProbe: {
+                ...health,
+                periodSeconds: 20,
+                timeoutSeconds: 3,
+                failureThreshold: 3,
+              },
               resources: structuredClone(r.wooMcp),
               volumeMounts: [{ name: 'tmp', mountPath: '/tmp' }],
             },
@@ -663,7 +699,10 @@ export function buildStoreManifests(spec: StoreSpec, s: StoreSettings): StoreMan
     o.kind === 'Secret' ? { ...o, data: Object.keys((o.data as object) ?? {}) } : o,
   );
   const specHash = createHash('sha256').update(JSON.stringify(hashed)).digest('hex').slice(0, 16);
-  namespace.metadata.annotations = { ...namespace.metadata.annotations, [ANNOTATION_SPEC_HASH]: specHash };
+  namespace.metadata.annotations = {
+    ...namespace.metadata.annotations,
+    [ANNOTATION_SPEC_HASH]: specHash,
+  };
   return { namespace, roleBindings, apply, wooMcp, job, specHash };
 }
 
@@ -692,7 +731,11 @@ export function generatedSecrets(
     {
       apiVersion: 'v1',
       kind: 'Secret',
-      metadata: { name: N.adminSecret, namespace: ns, labels: { ...labels, ...component('bootstrap') } },
+      metadata: {
+        name: N.adminSecret,
+        namespace: ns,
+        labels: { ...labels, ...component('bootstrap') },
+      },
       type: 'Opaque',
       data: {
         WP_ADMIN_USER: b64('admin'),

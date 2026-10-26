@@ -135,7 +135,11 @@ export function deriveStorePhase(o: StoreObservation): StorePhaseResult {
     ['woo-mcp', o.wooMcp],
   ] as const) {
     const rf = condition(item, 'ReplicaFailure');
-    if (rf) return { phase: 'failed', reason: clip(`${name}: ${rf.reason ?? 'ReplicaFailure'}: ${rf.message ?? ''}`) };
+    if (rf)
+      return {
+        phase: 'failed',
+        reason: clip(`${name}: ${rf.reason ?? 'ReplicaFailure'}: ${rf.message ?? ''}`),
+      };
   }
 
   const step = progress(o);
