@@ -96,7 +96,7 @@ and results only as `tool_result` blocks.
 
 ## 3. Data model
 
-`packages/contracts/sql/001_init.sql`, applied on gateway start by
+`packages/contracts/sql/001_init.sql` and `002_tool_permissions.sql` (ADR 008), applied on gateway start by
 `apps/gateway/src/db/migrate.ts` (advisory lock, `schema_migrations` table, idempotent).
 
 ```mermaid
@@ -249,6 +249,17 @@ or disable themselves, and the last active admin cannot be removed (row-locked,
 `users/routes.ts`). There is no self-signup: admins create members and get a one-time
 `tempPassword` (16 random bytes).
 
+**Tool permissions** (ADR 008; `packages/contracts/src/permissions.ts`,
+`apps/gateway/src/permissions/`, `core/visible-tools.ts`). Rules in `tool_permissions`
+(role or user × server or `*` × tool / `prefix*` / `*` × allow/deny); a user's own rules override
+the role's, the most specific rule wins, deny wins ties, and no match means deny. Default: admins
+everything; members only read tools (`woo__list_products`, `woo__list_orders`, `woo__get_order`,
+everything's harmless tools, GitLab `get_*` / `list_*` / search). Every tool list (MCP
+`tools/list`, chat tool set, `/api/tools`, `/api/upstreams/:id/tools`) is filtered by
+`listToolsFor(userId)`, and `callTool` rejects a disallowed name with `FORBIDDEN` before touching
+the upstream, audited as `denied`. Admins edit rules at `/api/permissions` (dashboard
+**Permissions**, with an effective-access preview using the same evaluator). Proven by D9.
+
 **API keys** (`apps/gateway/src/auth/api-keys.ts`, `keys/`). `urk_` + base64url(32 random
 bytes), returned once by `POST /api/keys`. The DB keeps sha256 (`key_hash`, unique) and an 8-char
 `prefix` for display. Only the exact form `Bearer urk_<43 chars>` is looked up. A key is accepted
@@ -339,19 +350,19 @@ and `values-prod.yaml` (README "Local → VPS").
 
 ## 11. Tradeoffs and what we would do with more time
 
-| Decision                              | Gained                                             | Cost / next step                                                                                                               |
-| ------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Stateless `/mcp`, no sessions         | Key re-checked on every request; no sticky routing | No `tools/list_changed` push; clients re-list to see D6                                                                        |
-| New upstream connection per operation | Simple, no shared state, isolation per call        | Extra `initialize` round trip per call; sessions are closed without `DELETE` (see below)                                       |
-| In-memory caches and rate limits      | No Redis                                           | Per replica, reset on restart; one gateway replica is assumed                                                                  |
-| All tools visible to every user       | Simple role model                                  | Per-tool / per-upstream permissions (O3, not planned) — today a member can call write tools such as `woo__update_order_status` |
-| Request/response chat                 | Simple, stateless                                  | No streaming; long tool loops show nothing until done                                                                          |
-| Metadata-only audit                   | No second store of customer data                   | Cannot replay what a tool was asked; admin actions are not audited                                                             |
-| Static bearer for GitLab              | No OAuth flow in the gateway                       | Token expiry is manual rotation (update Secret, re-run seed)                                                                   |
+| Decision                              | Gained                                                | Cost / next step                                                                         |
+| ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Stateless `/mcp`, no sessions         | Key re-checked on every request; no sticky routing    | No `tools/list_changed` push; clients re-list to see D6                                  |
+| New upstream connection per operation | Simple, no shared state, isolation per call           | Extra `initialize` round trip per call; sessions are closed without `DELETE` (see below) |
+| In-memory caches and rate limits      | No Redis                                              | Per replica, reset on restart; one gateway replica is assumed                            |
+| Per-tool permissions read per request | A rule change applies on the next call; one code path | One small policy query per `tools/list` / `tools/call` (ADR 008); no per-API-key scopes  |
+| Request/response chat                 | Simple, stateless                                     | No streaming; long tool loops show nothing until done                                    |
+| Metadata-only audit                   | No second store of customer data                      | Cannot replay what a tool was asked; admin actions are not audited                       |
+| Static bearer for GitLab              | No OAuth flow in the gateway                          | Token expiry is manual rotation (update Secret, re-run seed)                             |
 
 With more time: terminate upstream MCP sessions (`DELETE`) after each operation; stream-cap
 response bodies before parsing; audit admin actions; per-key rate limits on `/mcp`; egress
-NetworkPolicy for the gateway; append-only audit role in Postgres; per-tool permissions;
+NetworkPolicy for the gateway; append-only audit role in Postgres; per-API-key scopes;
 confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; image
 build + e2e in CI; a real VPS run (#25).
 

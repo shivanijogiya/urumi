@@ -27,6 +27,7 @@ export function Layout() {
           <NavLink to="/audit">Audit</NavLink>
           <NavLink to="/chat">Chat</NavLink>
           {user.role === 'admin' && <NavLink to="/members">Members</NavLink>}
+          {user.role === 'admin' && <NavLink to="/permissions">Permissions</NavLink>}
         </nav>
         <div className="account">
           <span>{user.email}</span>

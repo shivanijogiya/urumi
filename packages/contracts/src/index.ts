@@ -4,4 +4,5 @@ export * from './api.js';
 export * from './errors.js';
 export * from './mcp.js';
 export * from './naming.js';
+export * from './permissions.js';
 export type * from './rows.js';

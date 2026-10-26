@@ -3,6 +3,9 @@
 // with the server-side credential under the 15 s timeout → return the MCP CallToolResult or throw a
 // GatewayError. Every call, successful or not, ends in onCallFinished (the audit hook).
 //
+// Tool permissions (ADR 008) are checked first, from the parsed name, before anything is resolved
+// or contacted: a tool the caller's policy does not allow is FORBIDDEN, audited as 'denied'.
+//
 // Client-facing messages name at most the slug (validated `[a-z0-9-]`): never a URL, address,
 // credential or raw upstream text. Details go to the server log as fixed-vocabulary strings.
 import { MCP_TIMEOUTS, parseQualifiedName, type ErrorCode, type Outcome } from '@urumi/contracts';
@@ -16,6 +19,7 @@ import {
   UpstreamError,
   type UpstreamClient,
 } from '../mcp-client/upstream-client.js';
+import { loadToolPolicy } from '../permissions/repo.js';
 import { findUpstreamBySlug } from '../upstreams/repo.js';
 import { jsonBytes, MAX_RESULT_BYTES } from './limits.js';
 import { isListable, type RegisteredTool, type ToolRegistry } from './registry.js';
@@ -24,6 +28,7 @@ export const DEFAULT_CALL_TIMEOUT_MS = MCP_TIMEOUTS.callMs;
 /** An unknown name refreshes the upstream's list only if the cached one is older than this. */
 const UNKNOWN_TOOL_REFRESH_MS = 5_000;
 const MAX_NAME_LEN = 200;
+const SAFE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** A typed failure of callTool; the server error handler turns it into the contracts envelope. */
 export class GatewayError extends HttpError {
@@ -77,6 +82,7 @@ export interface CallToolDeps {
 const OUTCOME: Partial<Record<ErrorCode, Outcome>> = {
   UPSTREAM_TIMEOUT: 'timeout',
   TOOL_NOT_FOUND: 'denied',
+  FORBIDDEN: 'denied',
   UPSTREAM_DISABLED: 'denied',
   VALIDATION_FAILED: 'denied',
 };
@@ -153,6 +159,17 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       }
       if (!isPlainObject(args)) {
         throw new GatewayError('VALIDATION_FAILED', 'Tool arguments must be a JSON object');
+      }
+      if (parsed) {
+        const policy = await loadToolPolicy(deps.pool, userId);
+        if (!policy.allows(parsed.slug, parsed.toolPart)) {
+          // The caller's own input, echoed only when it is a well-formed tool name.
+          const shown = SAFE_NAME.test(qualifiedName) ? qualifiedName : `${parsed.slug}__…`;
+          throw new GatewayError(
+            'FORBIDDEN',
+            `Tool '${shown}' is not permitted for your account; ask an admin for access`,
+          );
+        }
       }
       const { row, tool } = await resolve(qualifiedName);
       record.tool = tool.originalName.slice(0, MAX_NAME_LEN);

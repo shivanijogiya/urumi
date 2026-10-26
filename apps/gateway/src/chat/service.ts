@@ -1,6 +1,6 @@
 // The dashboard chat agent (#19, C1–C3). Stateless: the browser resends the history, and each
 // request runs one Anthropic Messages tool loop. Tools are the CURRENT aggregate from the registry
-// under qualified names; every tool_use goes through callTool(sessionUser, name, input,
+// under qualified names, filtered by the user's tool permissions (ADR 008); every tool_use goes through callTool(sessionUser, name, input,
 // { source: 'chat' }), which writes the audit row. Results go back as tool_result blocks
 // (is_error on failure, text capped at 16 KB). The loop ends at a non-tool_use turn or after
 // MAX_TOOL_ROUNDS executed rounds, whichever comes first.
@@ -42,7 +42,8 @@ type ToolCall = ChatResponse['toolCalls'][number];
 
 export interface ChatServiceDeps {
   anthropic: AnthropicLike;
-  listTools: () => Promise<RegisteredTool[]>;
+  /** The user's visible tools (tool permissions applied). */
+  listToolsFor: (userId: string) => Promise<RegisteredTool[]>;
   callTool: CallTool;
   /** CHAT_MODEL; default claude-sonnet-5-5. */
   model?: string;
@@ -214,7 +215,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
   return {
     async chat(user, history, log) {
-      const registered = await deps.listTools();
+      const registered = await deps.listToolsFor(user.id);
       const tools = toAnthropicTools(registered, log);
       const slugs = new Map(registered.map((t) => [t.name, t.serverSlug]));
       // A history trimmed by the browser may start mid-conversation: the API wants a user turn first.

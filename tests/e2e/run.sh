@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs the end-to-end flows D1–D8 against the local cluster through the Ingress
+# Runs the end-to-end flows D1–D9 against the local cluster through the Ingress
 # (http://app.localtest.me, http://store.localtest.me).
-#   tests/e2e/run.sh all            seed, then D1..D8 (a new run: fresh run id, start time, audit
+#   tests/e2e/run.sh all            seed, then D1..D9 (a new run: fresh run id, start time, audit
 #                                   expectations)
 #   tests/e2e/run.sh D3 [D5 ...]    those steps, in the order given, within the current run (seeds
 #                                   first if there is no run yet); `seed` is also a valid step
@@ -14,7 +14,7 @@ STEP=run
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/lib/e2e.sh"
 
-[ "$#" -gt 0 ] || die "usage: tests/e2e/run.sh <D1..D8|seed|all> [...]"
+[ "$#" -gt 0 ] || die "usage: tests/e2e/run.sh <D1..D9|seed|all> [...]"
 for cmd in kubectl curl jq node; do need "$cmd" "Install $cmd"; done
 
 new_run() {
@@ -27,10 +27,10 @@ new_run() {
 steps=""
 for arg in "$@"; do
   case "$arg" in
-    all) steps="$steps seed D1 D2 D3 D4 D5 D6 D7 D8" ;;
-    seed | D[1-8]) steps="$steps $arg" ;;
-    d[1-8]) steps="$steps $(printf '%s' "$arg" | tr d D)" ;;
-    *) die "unknown step '$arg' (expected D1..D8, seed or all)" ;;
+    all) steps="$steps seed D1 D2 D3 D4 D5 D6 D7 D8 D9" ;;
+    seed | D[1-9]) steps="$steps $arg" ;;
+    d[1-9]) steps="$steps $(printf '%s' "$arg" | tr d D)" ;;
+    *) die "unknown step '$arg' (expected D1..D9, seed or all)" ;;
   esac
 done
 case " $* " in *" all "*) new_run ;; esac

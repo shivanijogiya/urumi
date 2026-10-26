@@ -9,6 +9,7 @@ user-invocable: false
 
 ## The one path
 `callTool(userId, qualifiedName, args)` in `src/core/call-tool.ts` is the only way a tool runs. It:
+0. Checks the caller's tool permissions (ADR 008, `permissions/repo.ts` → contracts `isToolAllowed`); not allowed → `FORBIDDEN`, audited `denied`. Every tool *list* goes through `listToolsFor(userId)` (`core/visible-tools.ts`) with the same policy.
 1. Resolves `server_slug__tool` → upstream (enabled, healthy) or returns `TOOL_NOT_FOUND` / `UPSTREAM_DISABLED` / `UPSTREAM_UNREACHABLE`.
 2. Calls the upstream with its server-side credential and a 15 s timeout.
 3. Writes one `audit_log` row: user_id, server_slug, tool, started_at, duration_ms, outcome (`ok` | `error` | `timeout` | `denied`), error_code. Arguments and results are **not** stored (customer data); store a short arg summary only if non-sensitive.

@@ -4,7 +4,8 @@
 // authenticated request gets a fresh SDK server + transport bound to that key's user, so
 // revocation takes effect on the very next request.
 //
-// tools/list is the registry's aggregate under qualified names; tools/call goes through callTool
+// tools/list is the registry's aggregate under qualified names, filtered by the caller's tool
+// permissions (listToolsFor, ADR 008); tools/call goes through callTool
 // (source 'mcp', the key's id), which writes the audit row. A GatewayError becomes an isError tool
 // result carrying the contracts envelope, so clients show it rather than a protocol failure.
 // Upstream `instructions` are never forwarded (untrusted).
@@ -22,7 +23,8 @@ import { httpStatusFor, makeError, MCP_PATH, type ErrorCode } from '@urumi/contr
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateApiKey } from '../auth/api-keys.js';
 import type { CallTool } from '../core/call-tool.js';
-import type { RegisteredTool, ToolRegistry } from '../core/registry.js';
+import type { RegisteredTool } from '../core/registry.js';
+import type { ListToolsFor } from '../core/visible-tools.js';
 import { HttpError } from '../http/errors.js';
 
 export const MCP_SERVER_NAME = 'urumi-gateway';
@@ -56,10 +58,10 @@ function errorResult(code: ErrorCode, message: string): CallToolResult {
   };
 }
 
-/** One request's MCP server: knows only the caller, the registry and callTool. */
+/** One request's MCP server: knows only the caller, its visible tools and callTool. */
 function createServer(
   caller: McpCaller,
-  deps: { registry: ToolRegistry; callTool: CallTool; log: FastifyBaseLogger },
+  deps: { listToolsFor: ListToolsFor; callTool: CallTool; log: FastifyBaseLogger },
 ): McpServer {
   const mcp = new McpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
@@ -67,7 +69,7 @@ function createServer(
   );
   mcp.server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      return { tools: (await deps.registry.listTools()).map(toMcpTool) };
+      return { tools: (await deps.listToolsFor(caller.userId)).map(toMcpTool) };
     } catch (err) {
       // The registry only throws when the database is down; its message is not for clients.
       deps.log.error({ err: { message: (err as Error).message } }, 'mcp tools/list failed');
@@ -100,7 +102,7 @@ function sendUnauthenticated(reply: FastifyReply): FastifyReply {
 
 export function registerMcpEndpoint(
   app: FastifyInstance,
-  deps: { registry: ToolRegistry; callTool: CallTool },
+  deps: { listToolsFor: ListToolsFor; callTool: CallTool },
 ): void {
   app.decorateRequest('mcpCaller', null);
 

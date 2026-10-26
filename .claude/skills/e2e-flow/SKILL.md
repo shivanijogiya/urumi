@@ -1,7 +1,7 @@
 ---
 name: e2e-flow
 description: Write or run the end-to-end demo flows D1–D8 against the local cluster. Use when a task mentions e2e, a D-step (D1…D8), acceptance against the running system, or the checkpoint.
-argument-hint: "[D1..D8|all]"
+argument-hint: "[D1..D9|all]"
 ---
 
 # End-to-end flows
@@ -20,6 +20,7 @@ Target: $ARGUMENTS
 | D6 | Disable an upstream; its tools disappear from `tools/list` and from the chat tool set |
 | D7 | `kubectl delete pod` (or scale to 0) the in-cluster second upstream; other tools still work; status endpoint shows it `down` |
 | D8 | Audit API returns every call made above with correct user, server, tool, duration, outcome |
+| D9 | Tool permissions (ADR 008): member B's `tools/list` hides `woo__create_product`; B's direct call → `FORBIDDEN`, audited `denied`; the admin can call it |
 
 ## Rules
 - Seed users and keys through the admin API in `tests/e2e/seed.sh`, never by writing to the DB.

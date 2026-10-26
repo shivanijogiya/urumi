@@ -35,10 +35,28 @@ export interface TestApp {
   close(): Promise<void>;
 }
 
-export async function setupApp(deps: Partial<AppDeps> = {}): Promise<TestApp> {
+export interface SetupOptions {
+  /**
+   * 'seeded' keeps the default tool permissions of 002_tool_permissions.sql (members read-only
+   * on woo/everything/gitlab, nothing else). 'open' (default) adds a member `* *` allow rule so
+   * suites about aggregation, chat, audit and the MCP endpoint can call their fake upstreams as a
+   * member; test/permissions.test.ts covers the policy itself with 'seeded'.
+   */
+  toolPermissions?: 'open' | 'seeded';
+}
+
+export async function setupApp(
+  deps: Partial<AppDeps> = {},
+  opts: SetupOptions = {},
+): Promise<TestApp> {
   const pool = createPool(await freshDatabase());
   await migrate(pool, MIGRATIONS_DIR);
   await seedAdmin(pool, ADMIN);
+  if ((opts.toolPermissions ?? 'open') === 'open') {
+    await pool.query(
+      `INSERT INTO tool_permissions (role, server_slug, tool, effect) VALUES ('member', '*', '*', 'allow')`,
+    );
+  }
   const app = buildApp({ pool, publicOrigin: PUBLIC_ORIGIN, encKey: ENC_KEY, ...deps });
   await app.ready();
 
