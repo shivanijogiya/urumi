@@ -113,7 +113,8 @@ checked_after_kill() {
 poll 75 checked_after_kill || fail "everything.lastCheckedAt did not advance after the pod kill (health loop stopped?)"
 note "everything lastCheckedAt=$(upstream_field everything lastCheckedAt) (> kill at $killed_at); status=$(upstream_field everything status)"
 leaders=$(for p in $(k get pods -l "$SEL" -o name); do
-  k logs "$p" 2>/dev/null | grep -q 'health lease acquired' && printf '%s ' "${p#pod/}"
+  # grep -c reads all input: grep -q would SIGPIPE kubectl and fail the pipeline (pipefail).
+  [ "$(k logs "$p" 2>/dev/null | grep -c 'health lease acquired')" -gt 0 ] && printf '%s ' "${p#pod/}"
 done)
 note "pods that acquired the health lease (current pods' logs): ${leaders:-none-yet}"
 
