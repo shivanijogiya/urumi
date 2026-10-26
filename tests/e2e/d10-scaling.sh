@@ -112,20 +112,19 @@ checked_after_kill() {
 }
 poll 75 checked_after_kill || fail "everything.lastCheckedAt did not advance after the pod kill (health loop stopped?)"
 note "everything lastCheckedAt=$(upstream_field everything lastCheckedAt) (> kill at $killed_at); status=$(upstream_field everything status)"
-# The lease is held by a pod that exists now (if the deleted pod held it, a survivor took over).
+# The health lease (gateway_leases, ADR 010) is held, unexpired, by a pod that is Ready now: if
+# the deleted pod held it, a survivor took over. Read from Postgres, the source of truth.
+lease_holder() {
+  k exec "$RELEASE-postgres-0" -- sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT holder FROM gateway_leases WHERE name = '"'health'"' AND expires_at > now()"' \
+    2>/dev/null
+}
 leader_alive() {
-  local p
-  for p in $(ready_pods); do
-    # grep -c reads all input: grep -q would SIGPIPE kubectl and fail the pipeline (pipefail).
-    if [ "$(k logs "$p" 2>/dev/null | grep -c 'health lease acquired')" -gt 0 ]; then
-      leader=$p
-      return 0
-    fi
-  done
-  return 1
+  leader=$(lease_holder)
+  [ -n "$leader" ] && [ "$(ready_pods | grep -cx "$leader")" -gt 0 ]
 }
 leader=""
-poll 75 leader_alive || fail "no current gateway pod holds the health lease after the kill"
+poll 75 leader_alive || fail "health lease not held by a live gateway pod after the kill (holder: ${leader:-none})"
 note "health lease holder after the kill: $leader (deleted: $victim)"
 
 # ── 4. Burst over the per-key limit ──────────────────────────────────────────────────────────
