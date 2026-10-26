@@ -132,7 +132,7 @@ export class ToolRegistry {
   }
 
   /** Last known tool count for the row's current version; 0 if unknown or not listable. */
-  toolCount(row: UpstreamRow): number {
+  toolCount(row: Pick<UpstreamRow, 'id' | 'enabled' | 'status' | 'updated_at'>): number {
     const entry = this.cache.get(row.id);
     return isListable(row) && entry?.version === versionOf(row) ? entry.tools.length : 0;
   }

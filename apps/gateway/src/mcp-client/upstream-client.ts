@@ -30,6 +30,7 @@ import {
   type LookupFn,
 } from '../upstreams/ssrf.js';
 import { MAX_RESULT_RESPONSE_BYTES } from '../core/limits.js';
+import { serviceHost } from '../hosted/manifests.js';
 import { withBodyLimit } from './body-limit.js';
 import { pinnedFetch } from './pinned-fetch.js';
 
@@ -49,7 +50,8 @@ export type UpstreamTarget = Pick<
   | 'credential_ciphertext'
   | 'credential_iv'
   | 'credential_tag'
->;
+> &
+  Partial<Pick<UpstreamRow, 'slug' | 'hosted'>>;
 
 /**
  * `timeout`: the deadline passed. `unreachable`: no usable MCP session (blocked address, DNS,
@@ -83,6 +85,11 @@ export interface UpstreamClientOptions {
   allowedHosts: readonly string[];
   /** DNS resolver for the SSRF guard; the system resolver if unset. */
   lookup?: LookupFn;
+  /**
+   * Hosted servers (ADR 014): a row with `hosted` may reach exactly its own generated Service host
+   * (`mcp-<slug>.<namespace>.svc.cluster.local`) and nothing else private; other rows never get it.
+   */
+  hostedNamespace?: string;
   /** Debug log for swallowed cleanup failures (session DELETE). */
   log?: { debug(obj: object, msg: string): void };
 }
@@ -195,7 +202,10 @@ export class UpstreamClient {
       const headers = credentialHeaders(target, this.opts.encKey);
       // Call-time SSRF check, after DNS; the connection is pinned to the checked addresses.
       const safe = await assertSafeUrl(target.url, {
-        allow: this.opts.allowedHosts,
+        allow:
+          target.hosted && target.slug && this.opts.hostedNamespace
+            ? [serviceHost(target.slug, this.opts.hostedNamespace)]
+            : this.opts.allowedHosts,
         ...(this.opts.lookup ? { lookup: this.opts.lookup } : {}),
         timeoutMs: Math.min(DNS_TIMEOUT_MS, timeoutMs),
       });

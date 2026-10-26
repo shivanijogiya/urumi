@@ -8,6 +8,8 @@ import { createPool } from './db/pool.js';
 import { seedAdmin } from './db/seed.js';
 import { GatewayMetrics } from './metrics/metrics.js';
 import { startMetricsServer } from './metrics/server.js';
+import { HttpKubeApi } from './hosted/kube.js';
+import { HOSTED_LEASE } from './hosted/reconciler.js';
 import { buildApp, LOGGER_OPTIONS } from './server.js';
 
 const DB_WAIT_MS = 120_000;
@@ -46,6 +48,23 @@ async function main(): Promise<void> {
     mcpRateLimits: config.mcpRateLimits,
     metrics,
     oauth: { redirectSchemes: config.oauthRedirectSchemes },
+    ...(config.hosted
+      ? {
+          hosted: {
+            kube: new HttpKubeApi({
+              namespace: config.hosted.namespace,
+              host: config.hosted.kubeHost,
+              port: config.hosted.kubePort,
+            }),
+            namespace: config.hosted.namespace,
+            serviceAccountName: config.hosted.serviceAccountName,
+            allowedImages: config.hosted.allowedImages,
+            requireDigest: config.hosted.requireDigest,
+            maxServers: config.hosted.maxServers,
+            lease: new Lease(pool, HOSTED_LEASE, config.podName),
+          },
+        }
+      : {}),
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
   if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {
@@ -64,6 +83,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     server.log.info({ signal }, 'shutting down');
     await health.stop().catch(() => undefined);
+    await server.hostedReconciler?.stop().catch(() => undefined);
     await metricsServer?.close().catch(() => undefined);
     await server.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
@@ -84,6 +104,10 @@ async function main(): Promise<void> {
     server.log.info({ port: config.metricsPort }, 'metrics listening (internal)');
   }
   health.start();
+  if (server.hostedReconciler) {
+    server.hostedReconciler.start();
+    server.log.info({ namespace: config.hosted?.namespace }, 'hosted MCP servers enabled');
+  }
 }
 
 async function waitForDatabase(

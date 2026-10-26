@@ -32,6 +32,11 @@ import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { PgTokenBucket, type McpRateLimits } from './ratelimit/bucket.js';
 import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
+import type { Lease } from './core/leader.js';
+import { normaliseAllowList } from './hosted/images.js';
+import type { KubeApi } from './hosted/kube.js';
+import { HostedReconciler } from './hosted/reconciler.js';
+import { registerHostedRoutes } from './hosted/routes.js';
 import type { LookupFn } from './upstreams/ssrf.js';
 import { registerUserRoutes } from './users/routes.js';
 
@@ -48,6 +53,8 @@ export interface ToolService {
 declare module 'fastify' {
   interface FastifyInstance {
     tools: ToolService;
+    /** Hosted-server reconciler (ADR 014); null when hosting is off. main.ts starts it. */
+    hostedReconciler: HostedReconciler | null;
   }
 }
 
@@ -92,6 +99,21 @@ export interface AppDeps {
    * private-use redirect URI schemes (OAUTH_REDIRECT_SCHEMES). `limits`: tests shrink them.
    */
   oauth?: { redirectSchemes?: readonly string[]; limits?: Partial<OAuthLimits> };
+  /**
+   * Hosted MCP servers (ADR 014). Absent: the API lists nothing new and refuses creates. main.ts
+   * passes an HttpKubeApi; tests pass an in-memory fake. `namespace` also scopes the SSRF guard's
+   * per-row exception for hosted upstream rows.
+   */
+  hosted?: {
+    kube: KubeApi;
+    namespace: string;
+    serviceAccountName: string;
+    allowedImages: readonly string[];
+    requireDigest?: boolean;
+    maxServers?: number;
+    lease?: Lease;
+    intervalMs?: number;
+  };
 }
 
 /**
@@ -110,6 +132,9 @@ export const LOGGER_OPTIONS = {
       'credential',
       '*.credential',
       'req.body.credential',
+      'req.body.env',
+      'env',
+      '*.env',
     ],
     censor: '[redacted]',
   },
@@ -184,6 +209,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     encKey: deps.encKey,
     allowedHosts,
     ...lookup,
+    ...(deps.hosted ? { hostedNamespace: deps.hosted.namespace } : {}),
     log: app.log,
   });
   const registry = new ToolRegistry({
@@ -213,6 +239,29 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerKeyRoutes(app);
   registerUpstreamRoutes(app, { encKey: deps.encKey, allowedHosts, ...lookup, registry });
   registerToolRoutes(app, { registry, listToolsFor });
+  const hostedReconciler = deps.hosted
+    ? new HostedReconciler({
+        pool: deps.pool,
+        kube: deps.hosted.kube,
+        registry,
+        encKey: deps.encKey,
+        log: app.log,
+        namespace: deps.hosted.namespace,
+        serviceAccountName: deps.hosted.serviceAccountName,
+        ...(deps.hosted.lease ? { lease: deps.hosted.lease } : {}),
+        ...(deps.hosted.intervalMs ? { intervalMs: deps.hosted.intervalMs } : {}),
+      })
+    : null;
+  app.decorate('hostedReconciler', hostedReconciler);
+  registerHostedRoutes(app, {
+    encKey: deps.encKey,
+    registry,
+    reconciler: hostedReconciler,
+    namespace: deps.hosted?.namespace ?? 'urumi-hosted',
+    allowedImages: normaliseAllowList(deps.hosted?.allowedImages ?? []),
+    requireDigest: deps.hosted?.requireDigest ?? false,
+    maxServers: deps.hosted?.maxServers ?? 5,
+  });
   registerAuditRoutes(app);
   registerPermissionRoutes(app);
   registerMcpEndpoint(app, {

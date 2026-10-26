@@ -35,6 +35,11 @@ export const ROUTES = {
   updateUpstream: { method: 'PATCH', path: '/api/upstreams/:id', auth: 'admin' },
   deleteUpstream: { method: 'DELETE', path: '/api/upstreams/:id', auth: 'admin' },
   listUpstreamTools: { method: 'GET', path: '/api/upstreams/:id/tools', auth: 'session' },
+  // Hosted MCP servers (ADR 014): run by the gateway in the cluster from a container image.
+  listHostedServers: { method: 'GET', path: '/api/hosted-servers', auth: 'admin' },
+  createHostedServer: { method: 'POST', path: '/api/hosted-servers', auth: 'admin' },
+  updateHostedServer: { method: 'PATCH', path: '/api/hosted-servers/:id', auth: 'admin' },
+  deleteHostedServer: { method: 'DELETE', path: '/api/hosted-servers/:id', auth: 'admin' },
   listTools: { method: 'GET', path: '/api/tools', auth: 'session' },
   listAudit: { method: 'GET', path: '/api/audit', auth: 'session' },
   listPermissions: { method: 'GET', path: '/api/permissions', auth: 'admin' },
@@ -154,9 +159,95 @@ export const UpstreamSchema = z.strictObject({
   /** Last successful health check. */
   lastOkAt: timestamp.nullable(),
   toolCount: z.number().int().nonnegative(),
+  /** Run by the gateway from a container image (ADR 014); managed via /api/hosted-servers. */
+  hosted: z.boolean().optional(),
 });
 export const UpstreamResponseSchema = z.object({ upstream: UpstreamSchema });
 export const UpstreamListResponseSchema = z.object({ upstreams: z.array(UpstreamSchema) });
+
+// ── Hosted MCP servers (ADR 014) ─────────────────────────────────────────────────────────────
+/** Lowercase image reference (registry/path[:tag][@sha256:digest]); the gateway applies the allow-list. */
+export const IMAGE_REF_RE =
+  /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$/;
+/** Env var names: POSIX-ish; PORT and KUBERNETES_* are set by the platform. */
+export const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const envName = z
+  .string()
+  .regex(ENV_NAME_RE, 'Must be a valid environment variable name')
+  .refine((n) => n !== 'PORT' && !n.startsWith('KUBERNETES_'), 'is set by the platform');
+const envValue = z
+  .string()
+  .min(1)
+  .max(4096)
+  .regex(/^[^\0]*$/, 'No NUL');
+export const HostedEnvSchema = z
+  .record(envName, envValue)
+  .refine((env) => Object.keys(env).length <= 20, 'At most 20 variables');
+export const HostedPresetSchema = z.enum(['small', 'medium']);
+export const HostedPhaseSchema = z.enum([
+  'deploying',
+  'connected',
+  'unreachable',
+  'failed',
+  'deleting',
+]);
+const imageRef = z.string().max(512).regex(IMAGE_REF_RE, 'Must be a lowercase image reference');
+const mcpPath = z
+  .string()
+  .regex(/^\/[A-Za-z0-9._~/-]{0,127}$/, 'Must be an absolute path')
+  .default('/mcp');
+const containerPort = z.number().int().min(1024).max(65535);
+
+export const CreateHostedServerRequestSchema = z.strictObject({
+  slug: slug.refine((s) => !RESERVED_SLUGS.includes(s), 'is reserved'),
+  name: displayName,
+  image: imageRef,
+  port: containerPort,
+  mcpPath,
+  preset: HostedPresetSchema.default('small'),
+  /** Outbound internet (80/443, no private ranges). Default: none at all. */
+  egress: z.boolean().default(false),
+  /** Values are write-only: stored encrypted, injected via a Secret, never returned. */
+  env: HostedEnvSchema.optional(),
+});
+export const UpdateHostedServerRequestSchema = z.strictObject({
+  name: displayName.optional(),
+  image: imageRef.optional(),
+  preset: HostedPresetSchema.optional(),
+  egress: z.boolean().optional(),
+  /** Replaces all variables; {} removes them. */
+  env: HostedEnvSchema.optional(),
+});
+/** Strict: env values can never appear in a response, only their names. */
+export const HostedServerSchema = z.strictObject({
+  id,
+  slug,
+  name: z.string(),
+  image: z.string(),
+  imageDigest: z.string().nullable(),
+  port: z.number().int(),
+  mcpPath: z.string(),
+  preset: HostedPresetSchema,
+  egress: z.boolean(),
+  envKeys: z.array(z.string()),
+  phase: HostedPhaseSchema,
+  /** Why it is failed / unreachable / still deploying (ImagePullBackOff, CrashLoopBackOff …). */
+  reason: z.string().nullable(),
+  /** In-cluster URL the gateway registered as the upstream. */
+  url: z.string(),
+  toolCount: z.number().int().nonnegative(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+});
+export const HostedServerResponseSchema = z.object({ server: HostedServerSchema });
+export const HostedServerListResponseSchema = z.object({
+  /** False when the gateway runs without HOSTED_ENABLED (no Kubernetes access). */
+  enabled: z.boolean(),
+  allowedImagePrefixes: z.array(z.string()),
+  requireDigest: z.boolean(),
+  maxServers: z.number().int(),
+  servers: z.array(HostedServerSchema),
+});
 
 // ── Tools ────────────────────────────────────────────────────────────────────────────────────
 /**
@@ -312,6 +403,11 @@ export type CreateUpstreamRequest = z.infer<typeof CreateUpstreamRequestSchema>;
 export type UpdateUpstreamRequest = z.infer<typeof UpdateUpstreamRequestSchema>;
 export type Upstream = z.infer<typeof UpstreamSchema>;
 export type Tool = z.infer<typeof ToolSchema>;
+export type CreateHostedServerRequest = z.infer<typeof CreateHostedServerRequestSchema>;
+export type UpdateHostedServerRequest = z.infer<typeof UpdateHostedServerRequestSchema>;
+export type HostedServer = z.infer<typeof HostedServerSchema>;
+export type HostedServerListResponse = z.infer<typeof HostedServerListResponseSchema>;
+export type HostedPhase = z.infer<typeof HostedPhaseSchema>;
 export type Outcome = z.infer<typeof OutcomeSchema>;
 export type AuditQuery = z.infer<typeof AuditQuerySchema>;
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
