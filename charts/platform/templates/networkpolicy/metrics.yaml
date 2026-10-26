@@ -1,0 +1,52 @@
+{{- if and .Values.networkPolicy.enabled .Values.gateway.enabled .Values.gateway.metrics.enabled }}
+{{- $m := .Values.gateway.metrics }}
+# Metrics (ADR 011): the gateway's internal /metrics port is reachable only from pods carrying the
+# scraper label in this namespace (and from a configured monitoring namespace). Traefik is NOT
+# admitted to it (its allow policy covers 8080 only), so the Ingress can never serve /metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway") }}-metrics
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    {{- include "platform.gatewayPeerSelector" . | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $m.scraperLabel | nindent 14 }}
+        {{- with $m.scraperNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $m.port }}
+---
+# Egress for scraper pods in this namespace (default deny covers egress too): the metrics port of
+# the gateway pods, nothing else (DNS comes from the namespace-wide DNS policy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-metrics-scraper-egress
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $m.scraperLabel | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            {{- include "platform.gatewayPeerSelector" . | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ $m.port }}
+{{- end }}
