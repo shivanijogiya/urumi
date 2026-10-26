@@ -431,6 +431,22 @@ and `values-prod.yaml` (README "Local → VPS").
   Role, in `urumi-hosted`: deployments get/list/create/patch/delete, services and secrets
   create/patch/delete (no secret reads), pods get/list — checked by `tests/infra/hosted-chart.sh`.
   The gateway talks to the API with `node:https` + its projected token (no client library).
+- **Multiple stores** (ADR 015, `templates/stores/`, `multiStore.enabled`, on in
+  `values-local.yaml`, off in `values-prod.yaml`): admins create and delete extra WooCommerce
+  stores on the **Stores** page (`POST /api/stores`: slug, name, admin email). The gateway's
+  provisioner (`stores/provisioner.ts`, Postgres lease `stores`) creates namespace `store-<slug>`
+  (Pod Security `restricted`, ResourceQuota + LimitRange, default-deny NetworkPolicies with only
+  the store's own flows), MariaDB + WordPress with their PVCs, an Ingress for
+  `<slug>.<multiStore.domainSuffix>`, generated passwords in create-once Secrets, the built-in
+  store's bootstrap Job (same scripts, mounted into the gateway from the bootstrap ConfigMap), and
+  — after the Job succeeded — a woo-mcp Deployment with its own shared secret. It then enables the
+  store's upstream row (`http://woo-mcp.store-<slug>.svc.cluster.local/mcp`, tools `<slug>__*`)
+  with the built-in store's member read-only defaults. Status Provisioning (with the step) / Ready
+  / Failed (with the reason; Retry) / Deleting. Delete removes the namespace (volumes included),
+  then the rules and the upstream. RBAC: a ClusterRole for namespaces + creating RoleBindings that
+  may only reference two chart-defined ClusterRoles (`bind` by name), confined to `store-*`
+  namespaces by a ValidatingAdmissionPolicy; checked by `tests/infra/stores-chart.sh`, proved by
+  D15. Stores are runtime objects: Helm upgrades and rollbacks do not touch them (ADR 015).
 - **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
   in-cluster upstreams pass the private-address check.
 
@@ -480,6 +496,7 @@ happens per component:
 | Store bootstrap (Job, `post-install,post-upgrade` hook) | re-runs after every install/upgrade; idempotent: checks state first, keeps a still-working Application Password, re-scales woo-mcp     | **does not run** (no `post-rollback` hook); the store keeps its state         |
 | Secrets `urumi-env`, `urumi-woo-api`                    | never rendered by the chart; untouched                                                                                                 | untouched                                                                     |
 | NetworkPolicies, RBAC, Ingress                          | created/updated/deleted to match the chart                                                                                             | restored to the old revision's set (verified: README "Upgrades and rollback") |
+| Store namespaces `store-<slug>` (ADR 015)               | not Helm objects: untouched by the upgrade; the new gateway re-applies objects whose spec hash changed (e.g. a new woo-mcp image)      | untouched; without `multiStore` in the old revision they run unmanaged        |
 
 **Rules that keep rollback safe.**
 

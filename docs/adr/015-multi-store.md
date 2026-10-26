@@ -107,7 +107,7 @@ the replica holding the Postgres lease `stores`, level-triggered and idempotent 
   mid-provision).
 - `failed`: nothing is applied until Retry, which bumps `generation` (new Job `bootstrap-g<n+1>`,
   old Jobs deleted, woo-mcp restarted through a pod-template annotation) and restarts the timeout.
-- `absent`: `DELETE` the namespace (foreground of the namespace controller: every object, both PVCs
+- `absent`: `DELETE` the namespace (the namespace controller then removes every object, both PVCs
   and — with `local-path`'s `Delete` reclaim policy — their volumes); while it exists the phase is
   `deleting`; once the API returns 404, delete the store's permission rules and its upstream row
   (cascades to `stores`) in one transaction. A crash anywhere repeats the step; D15 restarts the
