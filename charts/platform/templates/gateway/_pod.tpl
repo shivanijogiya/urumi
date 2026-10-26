@@ -109,6 +109,9 @@ spec:
           value: {{ $v.chatModel | quote }}
         - name: CHAT_DISCOVERY_THRESHOLD
           value: {{ $v.chatDiscoveryThreshold | int | quote }}
+        # OAuth (ADR 013): extra private-use redirect URI schemes (https + loopback always allowed).
+        - name: OAUTH_REDIRECT_SCHEMES
+          value: {{ join "," ($v.oauth.extraRedirectSchemes | default list) | quote }}
         {{- if $.Values.wooMcp.enabled }}
         # The internal woo-mcp upstream (W3) and the header secret it requires.
         - name: WOO_MCP_URL

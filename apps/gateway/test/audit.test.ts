@@ -216,6 +216,7 @@ describe('no arguments or results stored', () => {
       'error_code',
       'error_detail', // fixed vocabulary (ADR 011), never upstream text or arguments
       'id',
+      'oauth_grant_id', // ADR 013: which OAuth grant (connected app) made an /mcp call
       'outcome',
       'server_slug',
       'source',
@@ -349,6 +350,8 @@ describe('GET /api/audit', () => {
       errorCode: null,
       errorDetail: null,
       errorReason: null,
+      authMethod: 'session',
+      oauthClientName: null,
     });
   });
 
