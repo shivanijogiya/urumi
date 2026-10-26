@@ -44,8 +44,32 @@ export interface UpstreamRow {
   last_checked_at: Date | null;
   /** Last successful health check (004_observability.sql). */
   last_ok_at: Date | null;
+  /** Created for a hosted server (006_hosted.sql): managed via /api/hosted-servers only. */
+  hosted: boolean;
   created_at: Date;
   updated_at: Date;
+}
+
+/** A hosted MCP server (006_hosted.sql, ADR 014). id = its upstream row's id. */
+export interface HostedServerRow {
+  id: string;
+  image: string;
+  image_digest: string | null;
+  port: number;
+  mcp_path: string;
+  preset: 'small' | 'medium';
+  egress: boolean;
+  env_keys: string[];
+  env_ciphertext: Uint8Array | null;
+  env_iv: Uint8Array | null;
+  env_tag: Uint8Array | null;
+  desired_state: 'present' | 'absent';
+  phase: 'deploying' | 'connected' | 'unreachable' | 'failed' | 'deleting';
+  reason: string | null;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  last_reconciled_at: Date | null;
 }
 
 export interface AuditLogRow {

@@ -319,6 +319,35 @@ gateway:
       cpu: 500m
       memory: 256Mi
 
+# Hosted MCP servers (brief item 5; docs/adr/014-hosted-mcp.md): admins add an MCP server by
+# container image; the gateway runs it in `namespace` (Deployment + Service + optional env Secret)
+# with a fixed hardened pod template and registers it as an upstream once ready. The gateway gets a
+# ServiceAccount whose only rights are a Role in that namespace (Deployments/Services/Secrets write,
+# Pods read). The namespace enforces Pod Security `restricted`, a default-deny NetworkPolicy (ingress
+# only from the gateway; egress DNS, plus internet 80/443 for servers created with egress on), a
+# ResourceQuota and a LimitRange. Off by default: the chart then renders none of it.
+hosted:
+  enabled: false
+  namespace: urumi-hosted
+  # Created (and on uninstall deleted) by this chart. Set false to manage it yourself (it must carry
+  # the pod-security.kubernetes.io/enforce=restricted label).
+  createNamespace: true
+  # ServiceAccount the hosted pods run as (no token, no permissions).
+  serviceAccountName: hosted-mcp
+  # Image allow-list: registry/repository prefixes, each ending in '/'. Images elsewhere are refused
+  # with a clear error. Empty = nothing can be hosted.
+  allowedImages: []
+  # Refuse images that are not pinned by @sha256 digest.
+  requireDigest: false
+  # Most hosted servers at once (the quota below bounds resources regardless).
+  maxServers: 5
+  quota:
+    pods: '6'
+    requests.cpu: 300m
+    requests.memory: 768Mi
+    limits.cpu: '3'
+    limits.memory: 1536Mi
+
 # NetworkPolicies (brief item 6; docs/adr/009-network-policies.md, templates/networkpolicy/):
 # a namespace-wide default deny for ingress AND egress, plus an allow policy per real flow
 # (Traefik -> dashboard/gateway/WordPress; gateway -> Postgres, woo-mcp, everything, internet

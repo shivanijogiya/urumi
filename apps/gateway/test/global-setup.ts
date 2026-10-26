@@ -53,6 +53,15 @@ export default async function setup(project: TestProject) {
     '-p',
     '127.0.0.1::5432',
     'postgres:16-alpine',
+    // Throwaway server: no durability needed, and a small WAL keeps the data volume small.
+    '-c',
+    'fsync=off',
+    '-c',
+    'full_page_writes=off',
+    '-c',
+    'max_wal_size=96MB',
+    '-c',
+    'min_wal_size=32MB',
   ]);
   const containerId = stdout.trim();
   // -v: also delete the container's anonymous data volume. `--rm` alone does not when the

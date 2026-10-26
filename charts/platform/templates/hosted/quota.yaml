@@ -1,0 +1,36 @@
+{{- if .Values.hosted.enabled }}
+{{- $ns := include "platform.hosted.namespace" . }}
+# Resource exhaustion guard (ADR 014): however many servers are created (the gateway also caps them
+# at hosted.maxServers), the hosted namespace cannot use more than this.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: hosted-quota
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.hosted.quota | nindent 4 }}
+---
+# Defaults for any container that does not set resources (the gateway always does).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: hosted-limits
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 250m
+        memory: 128Mi
+      defaultRequest:
+        cpu: 10m
+        memory: 48Mi
+      max:
+        cpu: 500m
+        memory: 256Mi
+{{- end }}

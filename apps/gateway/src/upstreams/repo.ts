@@ -12,7 +12,7 @@ export type StoredCredential = Sealed & { type: 'bearer' | 'header'; headerName:
 
 const COLUMNS = `id, slug, name, url, enabled, credential_type, credential_header_name,
   credential_ciphertext, credential_iv, credential_tag, status, last_error, last_checked_at,
-  last_ok_at, created_at, updated_at`;
+  last_ok_at, hosted, created_at, updated_at`;
 
 /**
  * The API view of a row. Parsed with the strict UpstreamSchema, so an unexpected field (a
@@ -36,6 +36,7 @@ export function toUpstream(
     lastErrorReason: classifyFailure(row.last_error),
     lastOkAt: row.last_ok_at?.toISOString() ?? null,
     toolCount: opts.toolCount ?? 0, // from the tool registry cache
+    hosted: row.hosted,
   });
 }
 
@@ -92,13 +93,15 @@ export async function insertUpstream(
     url: string;
     enabled: boolean;
     credential: StoredCredential | null;
+    /** A hosted server's row (ADR 014). Default false. */
+    hosted?: boolean;
   },
 ): Promise<UpstreamRow | null> {
   const c = u.credential;
   const { rows } = await db.query<UpstreamRow>(
     `INSERT INTO upstreams (id, slug, name, url, enabled, credential_type, credential_header_name,
-       credential_ciphertext, credential_iv, credential_tag)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       credential_ciphertext, credential_iv, credential_tag, hosted)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (slug) DO NOTHING
      RETURNING ${COLUMNS}`,
     [
@@ -112,6 +115,7 @@ export async function insertUpstream(
       c?.ciphertext ?? null,
       c?.iv ?? null,
       c?.tag ?? null,
+      u.hosted ?? false,
     ],
   );
   return rows[0] ?? null;

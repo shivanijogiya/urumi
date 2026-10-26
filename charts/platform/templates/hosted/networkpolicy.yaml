@@ -1,0 +1,86 @@
+{{- if and .Values.hosted.enabled .Values.networkPolicy.enabled }}
+{{- $ns := include "platform.hosted.namespace" . }}
+{{- $dns := .Values.networkPolicy.dns }}
+# Hosted namespace (ADR 014): deny everything, then allow
+#   - ingress to hosted pods only from this release's gateway pods (any port: each server has its own)
+#   - egress to cluster DNS
+#   - egress to the public internet (80/443, private/link-local/metadata ranges excluded) ONLY for
+#     pods labelled urumi.io/hosted-egress=internet (the per-server "egress" switch, default off)
+# Nothing in the release namespace (Postgres, MariaDB, WordPress, woo-mcp) is reachable from here,
+# and the release namespace's own default deny refuses connections from here too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hosted-default-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hosted-allow-dns
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dns.podLabels | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hosted-from-gateway
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: urumi-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            {{- include "platform.gatewayPeerSelector" . | nindent 12 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hosted-internet-egress
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: urumi-gateway
+      urumi.io/hosted-egress: internet
+  policyTypes:
+    - Egress
+  egress:
+    {{- include "platform.np.internetEgress" . | nindent 4 }}
+{{- end }}

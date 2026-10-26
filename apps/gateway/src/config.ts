@@ -144,6 +144,63 @@ const EnvSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.coerce.number().int().min(0).max(65535).default(9464),
   ),
+  // Hosted MCP servers (ADR 014): the gateway runs admin-added container images in HOSTED_NAMESPACE
+  // through the Kubernetes API (in-pod ServiceAccount token). Off unless HOSTED_ENABLED=true.
+  HOSTED_ENABLED: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'], 'must be true or false')
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
+  HOSTED_NAMESPACE: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, 'must be a namespace name')
+      .default('urumi-hosted'),
+  ),
+  HOSTED_SERVICE_ACCOUNT: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, 'must be a ServiceAccount name')
+      .default('hosted-mcp'),
+  ),
+  // Comma-separated registry/repository prefixes, each ending in '/' (added if missing).
+  HOSTED_ALLOWED_IMAGES: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((p) => p.trim().toLowerCase())
+          .filter(Boolean)
+          .map((p) => (p.endsWith('/') ? p : `${p}/`)),
+      )
+      .refine(
+        (prefixes) =>
+          prefixes.every((p) =>
+            /^[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?\/(?:[a-z0-9._-]+\/)*$/.test(p),
+          ),
+        'must be comma-separated registry[/path]/ prefixes',
+      ),
+  ),
+  HOSTED_REQUIRE_DIGEST: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'], 'must be true or false')
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
+  HOSTED_MAX_SERVERS: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(100).default(5),
+  ),
+  KUBERNETES_SERVICE_HOST: optional(),
+  KUBERNETES_SERVICE_PORT: port(443),
   // This replica's name for the health-loop lease (Kubernetes: the pod name). Default: hostname.
   POD_NAME: z.preprocess(
     (v) => (v === '' ? undefined : v),
@@ -199,6 +256,16 @@ export interface Config {
   chatDiscoveryThreshold: number;
   /** OAUTH_REDIRECT_SCHEMES (lowercase). */
   oauthRedirectSchemes: string[];
+  /** Hosted MCP servers (ADR 014); null when HOSTED_ENABLED is not true. */
+  hosted: {
+    namespace: string;
+    serviceAccountName: string;
+    allowedImages: string[];
+    requireDigest: boolean;
+    maxServers: number;
+    kubeHost: string;
+    kubePort: number;
+  } | null;
 }
 
 export class ConfigError extends Error {
@@ -218,6 +285,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     for (const name of PG_VARS) {
       if (isUnset(name)) problems.push(`${name} is missing (or set DATABASE_URL)`);
     }
+  }
+  if (parsed.success && parsed.data.HOSTED_ENABLED && isUnset('KUBERNETES_SERVICE_HOST')) {
+    problems.push('KUBERNETES_SERVICE_HOST is missing (needed when HOSTED_ENABLED=true)');
   }
   if (!parsed.success || problems.length) {
     throw new ConfigError(`Invalid configuration: ${[...new Set(problems)].join('; ')}`);
@@ -253,6 +323,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     metricsPort: e.METRICS_PORT,
     chatDiscoveryThreshold: e.CHAT_DISCOVERY_THRESHOLD,
     oauthRedirectSchemes: e.OAUTH_REDIRECT_SCHEMES,
+    hosted: e.HOSTED_ENABLED
+      ? {
+          namespace: e.HOSTED_NAMESPACE,
+          serviceAccountName: e.HOSTED_SERVICE_ACCOUNT,
+          allowedImages: e.HOSTED_ALLOWED_IMAGES,
+          requireDigest: e.HOSTED_REQUIRE_DIGEST,
+          maxServers: e.HOSTED_MAX_SERVERS,
+          kubeHost: e.KUBERNETES_SERVICE_HOST!,
+          kubePort: e.KUBERNETES_SERVICE_PORT,
+        }
+      : null,
   };
 }
 
