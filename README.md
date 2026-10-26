@@ -1,16 +1,152 @@
 # Urumi MCP Gateway
 
-A WooCommerce store and a team MCP gateway, both on Kubernetes. An admin registers MCP servers
-once. Team members then use every enabled tool through one authenticated URL, from an MCP client
-(Claude Code, Cursor, MCP Inspector) or from the dashboard's chat agent. Every tool call is
-attributed to a user and audited. One Helm chart runs on local k3d and, with a different values
-file, on a VPS.
+Urumi is a team gateway for MCP tools, running next to a WooCommerce store on Kubernetes. An admin
+registers MCP servers once — our own WooCommerce MCP server, the MCP reference server, GitLab's
+hosted MCP server, container images the cluster runs for you, or extra stores created from the
+dashboard. Team members then use every tool they are permitted through **one authenticated URL**,
+from an MCP client (Claude Code, Cursor, MCP Inspector; API key or OAuth sign-in) or from the
+dashboard's chat agent. Every call is checked against per-tool permissions, rate limited, run with
+a timeout and written to an audit log under the user who made it. One Helm chart runs it on local
+k3d and, with a different values file, on a VPS. The project also ships a GitLab release pipeline
+that canaries every gateway release and heals a bad one with GitLab Duo agents.
 
 **New here? Start with [`docs/RUN_ON_YOUR_COMPUTER.md`](docs/RUN_ON_YOUR_COMPUTER.md)** — a
-plain-language, step-by-step guide to running it on your own laptop.
+plain-language, step-by-step guide to running it on your own laptop. All documents:
+[Docs index](#docs-index).
 
-Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
-· Requirement IDs (K1…D8): [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) · ADRs: [`docs/adr/`](docs/adr/)
+<!-- SCREENSHOTS
+## Screenshots
+
+| Upstream servers                                        | Chat with tool calls                 |
+| ------------------------------------------------------- | ------------------------------------ |
+| ![Upstreams page](docs/images/dashboard-servers.png)    | ![Chat page](docs/images/chat.png)   |
+
+| Audit log                              | Tool permissions                                 |
+| -------------------------------------- | ------------------------------------------------ |
+| ![Audit page](docs/images/audit.png)   | ![Permissions page](docs/images/permissions.png) |
+
+| Health / metrics                         | Stores                                   |
+| ---------------------------------------- | ---------------------------------------- |
+| ![Health page](docs/images/health.png)   | ![Stores page](docs/images/stores.png)   |
+SCREENSHOTS -->
+
+## Architecture
+
+```mermaid
+flowchart LR
+  browser["Browser: dashboard + chat"]
+  client["External MCP client<br/>(API key or OAuth)"]
+  claude["Claude API"]
+  gitlab["GitLab MCP<br/>gitlab.com/api/v4/mcp"]
+
+  subgraph urumi["namespace urumi"]
+    traefik["Traefik Ingress"]
+    dash["dashboard<br/>(nginx, React)"]
+    gw["gateway x2 replicas<br/>/api, /mcp, /oauth, chat"]
+    pg[("Postgres")]
+    woo["woo-mcp"]
+    wp["WordPress + WooCommerce"]
+    maria[("MariaDB")]
+    every["server-everything"]
+  end
+
+  subgraph hosted["namespace urumi-hosted"]
+    hmcp["hosted MCP servers<br/>(admin-added images)"]
+  end
+
+  subgraph store["namespace store-slug (one per extra store)"]
+    swoo["woo-mcp"]
+    swp["WordPress + WooCommerce"]
+    smaria[("MariaDB")]
+  end
+
+  browser -- "app.localtest.me" --> traefik
+  browser -- "store.localtest.me" --> traefik
+  client -- "app.localtest.me/mcp" --> traefik
+  traefik --> dash
+  traefik -- "/api, /mcp, /oauth" --> gw
+  traefik --> wp
+  gw --> pg
+  gw -- "shared-secret header" --> woo
+  woo -- "REST API + Application Password" --> wp
+  wp --> maria
+  gw --> every
+  gw -- "encrypted bearer token" --> gitlab
+  gw --> hmcp
+  gw --> swoo
+  swoo --> swp
+  swp --> smaria
+  gw -- "chat" --> claude
+```
+
+| Component         | Source                            | Runs as                                        | Reachable from                                    |
+| ----------------- | --------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
+| gateway           | `apps/gateway`                    | Deployment `urumi-gateway`, 2 replicas + PDB   | Ingress `app.<host>/api`, `/mcp`, `/oauth`        |
+| dashboard         | `apps/dashboard`                  | Deployment `urumi-dashboard` (nginx)           | Ingress `app.<host>/`                             |
+| woo-mcp           | `apps/woo-mcp`                    | Deployment `urumi-woo-mcp`                     | gateway pods only (NetworkPolicy + shared secret) |
+| server-everything | `apps/everything/Dockerfile`      | Deployment `urumi-everything`                  | gateway pods only (NetworkPolicy)                 |
+| WordPress + Woo   | official `wordpress` image        | Deployment + PVC                               | Ingress `store.<host>`                            |
+| MariaDB           | official `mariadb` image          | StatefulSet + PVC                              | in-cluster                                        |
+| Postgres 16       | official `postgres` image         | StatefulSet + PVC                              | gateway pods only (NetworkPolicy)                 |
+| bootstrap         | `charts/platform/files/bootstrap` | Helm `post-install,post-upgrade` hook Job      | —                                                 |
+| GitLab MCP        | hosted by GitLab                  | external                                       | gateway, over the internet                        |
+| hosted servers    | `apps/gateway/src/hosted`         | Deployments in `urumi-hosted`, made by gateway | gateway pods only (ADR 014)                       |
+| extra stores      | `apps/gateway/src/stores`         | namespace `store-<slug>`, made by gateway      | Ingress `<slug>.store.<host>`; woo-mcp: gateway   |
+
+## One tool call, end to end
+
+The MCP endpoint and the chat agent both end in the same `callTool` function
+(`apps/gateway/src/core/call-tool.ts`), so every call gets the same checks and the same audit row.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as MCP client
+  participant G as gateway
+  participant P as Postgres
+  participant U as Upstream MCP server
+
+  C->>G: POST /mcp tools/call (Bearer API key or OAuth token)
+  G->>P: authenticate: sha256(token) to user (before the body is read)
+  alt unknown or revoked
+    G-->>C: 401
+  end
+  G->>P: rate limit: per-key and per-user token buckets
+  alt over the limit
+    G-->>C: 429 + Retry-After (audited rate_limited)
+  end
+  G->>P: permission check: is this tool allowed for this user?
+  alt not permitted
+    G-->>C: FORBIDDEN (audited denied)
+  end
+  G->>U: SSRF check, pinned connection, credential header, 15 s deadline
+  U-->>G: result (or error / timeout)
+  G->>P: INSERT audit_log: user, server, tool, duration, outcome
+  G-->>C: tool result
+```
+
+## Features
+
+| Area                   | What you get                                                                                                                        | IDs / ADR    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Kubernetes             | One Helm chart for local k3d and a VPS; Ingress at stable URLs; probes and limits everywhere; data on PVCs; no secrets in git       | K1–K6        |
+| WooCommerce MCP server | Our own Streamable HTTP server: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`; internal-only | W1–W4        |
+| Gateway                | Admin-managed upstreams; one `/mcp` URL aggregating them as `{server}__{tool}`; slow/dead upstreams isolated; credentials encrypted | G1–G6        |
+| Team, keys, audit      | Admin and member roles; per-user API keys (hashed, revocable); every tool call audited                                              | T1–T3        |
+| Chat agent             | Claude tool loop in the dashboard, acting as the signed-in user, showing the tools it used                                          | C1–C3        |
+| Demo flows             | Scripted D1–D8 from the brief, plus D9–D15 for the extras: `tests/e2e/run.sh all`                                                   | D1–D8        |
+| Tool permissions       | Per-role and per-user allow/deny rules; members read-only by default                                                                | ADR 008, D9  |
+| Network isolation      | Default-deny NetworkPolicies (ingress + egress), non-root containers                                                                | ADR 009      |
+| Scaling                | 2 gateway replicas, shared Postgres rate limits, health-loop lease                                                                  | ADR 010, D10 |
+| Observability          | Prometheus `/metrics`, classified failure reasons, Health / Metrics page                                                            | ADR 011, D11 |
+| Many tools             | Discovery mode: search + call meta-tools                                                                                            | ADR 012, D12 |
+| OAuth 2.1              | MCP clients sign in through the browser (DCR, PKCE, rotating refresh tokens)                                                        | ADR 013, D13 |
+| Hosted MCP servers     | Add an MCP server by container image; the cluster runs it, hardened and isolated                                                    | ADR 014, D14 |
+| Multiple stores        | Create and delete WooCommerce stores from the dashboard, one namespace each                                                         | ADR 015, D15 |
+| Self-healing releases  | GitLab CI canary, automatic rollback, Duo incident / fix / postmortem flows                                                         | ADR 003–007  |
+
+Status per item, with what is missing: [Stand-out items attempted](#stand-out-items-attempted).
+Requirement-by-requirement evidence: [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md).
 
 ## GitLab Transcend hackathon: a release pipeline that heals itself
 
@@ -56,57 +192,9 @@ Details: [`docs/HACKATHON.md`](docs/HACKATHON.md) · ADRs [003 canary](docs/adr/
 [004 Duo flows](docs/adr/004-duo-flows.md), [005 self-healing](docs/adr/005-self-healing.md),
 [007 Duo dispatch](docs/adr/007-duo-dispatch.md).
 
-## The application being released
+## Quickstart
 
-## Architecture
-
-```mermaid
-flowchart LR
-  browser["Browser"]
-  client["External MCP client<br/>(Inspector, Claude Code)"]
-  subgraph k8s["Kubernetes namespace urumi"]
-    traefik["Traefik Ingress"]
-    dash["dashboard<br/>(nginx, React build)"]
-    gw["gateway<br/>/api/* · /mcp · chat loop<br/>callTool → audit_log"]
-    pg[("Postgres<br/>users, keys, upstreams, audit")]
-    woo["woo-mcp<br/>(ClusterIP only)"]
-    every["server-everything<br/>(ClusterIP only)"]
-    wp["WordPress + WooCommerce"]
-    db[("MariaDB")]
-    job["bootstrap Job<br/>(Helm hook)"]
-  end
-  gitlab["GitLab MCP<br/>gitlab.com/api/v4/mcp"]
-  claude["Claude API"]
-
-  browser -- "app.localtest.me /" --> traefik
-  browser -- "store.localtest.me" --> traefik
-  client -- "app.localtest.me/mcp + Bearer key" --> traefik
-  traefik --> dash
-  traefik -- "/api, /mcp" --> gw
-  traefik --> wp
-  gw --> pg
-  gw -- "x-woo-mcp-secret" --> woo
-  gw --> every
-  gw -- "Bearer PAT (encrypted at rest)" --> gitlab
-  gw -- "x-api-key" --> claude
-  woo -- "REST API + Application Password" --> wp
-  wp --> db
-  job -. "installs WP + Woo, writes Secret urumi-woo-api" .-> wp
-```
-
-| Component         | Source                            | Runs as                                   | Reachable from                                    |
-| ----------------- | --------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| gateway           | `apps/gateway`                    | Deployment `urumi-gateway`                | Ingress `app.<host>/api`, `/mcp`                  |
-| dashboard         | `apps/dashboard`                  | Deployment `urumi-dashboard` (nginx)      | Ingress `app.<host>/`                             |
-| woo-mcp           | `apps/woo-mcp`                    | Deployment `urumi-woo-mcp`                | gateway pods only (NetworkPolicy + shared secret) |
-| server-everything | `apps/everything/Dockerfile`      | Deployment `urumi-everything`             | gateway pods only (NetworkPolicy)                 |
-| WordPress + Woo   | official `wordpress` image        | Deployment + PVC                          | Ingress `store.<host>`                            |
-| MariaDB           | official `mariadb` image          | StatefulSet + PVC                         | in-cluster                                        |
-| Postgres 16       | official `postgres` image         | StatefulSet + PVC                         | gateway pods only (NetworkPolicy)                 |
-| bootstrap         | `charts/platform/files/bootstrap` | Helm `post-install,post-upgrade` hook Job | —                                                 |
-| GitLab MCP        | hosted by GitLab                  | external                                  | gateway, over the internet                        |
-
-## Prerequisites
+### Prerequisites
 
 | Tool              | Version                        | Why                                     |
 | ----------------- | ------------------------------ | --------------------------------------- |
@@ -128,7 +216,7 @@ You also need:
   (third upstream; see below). A classic PAT is refused by GitLab with
   `403 insufficient_granular_scope`.
 
-## Zero to running
+### Zero to running
 
 ```sh
 git clone https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase.git urumi && cd urumi
@@ -502,16 +590,22 @@ urumi-bootstrap   Complete   1/1           101s       21m
 ## Repo layout
 
 ```
-apps/woo-mcp/        WooCommerce MCP server (TypeScript, Streamable HTTP, internal-only)
-apps/gateway/        MCP gateway + admin API + chat agent backend (Fastify, Postgres)
-apps/dashboard/      React + Vite admin/member UI and chat panel (served by nginx)
-apps/everything/     Dockerfile for @modelcontextprotocol/server-everything (upstream 2)
-packages/contracts/  Shared zod schemas: API, DB schema (sql/), tool naming, error envelope
-charts/platform/     The one Helm chart; values.yaml, values-local.yaml, values-prod.yaml
-tests/e2e/           D1–D15 scripted flows (run.sh <step|all>), seed scripts
-tests/infra/         Cluster checks: chart, persistence, bootstrap, NetworkPolicies, auth
-scripts/             dev-setup, gen-env, cluster-up/down, secrets-apply, build-images
-docs/                REQUIREMENTS, PLAN, DESIGN, THREAT_MODEL, adr/
+.
+├── apps/
+│   ├── gateway/        MCP gateway + admin API + OAuth server + chat backend (Fastify, Postgres)
+│   ├── dashboard/      React + Vite admin/member UI and chat panel (served by nginx)
+│   ├── woo-mcp/        WooCommerce MCP server (TypeScript, Streamable HTTP, internal-only)
+│   └── everything/     Dockerfile for @modelcontextprotocol/server-everything (upstream 2)
+├── packages/
+│   └── contracts/      Shared zod schemas: API, DB schema (sql/), tool naming, permissions, errors
+├── charts/
+│   └── platform/       The one Helm chart; values.yaml, values-local.yaml, values-prod.yaml
+├── tests/
+│   ├── e2e/            seed + D1–D15 scripted flows (run.sh <step|all>)
+│   └── infra/          chart, persistence, bootstrap, NetworkPolicy and auth checks
+├── scripts/            dev-setup, gen-env, cluster-up/down, secrets-apply, build-images, canary/
+├── .gitlab/            CI includes (ci/) and the Duo Agent Platform flows (flows/)
+└── docs/               design, threat model, requirements, ADRs, guides
 ```
 
 ## Tests
@@ -538,6 +632,19 @@ Postgres service), GitLab's `secret_detection`, `semgrep-sast` and `kics-iac-sas
 chart publish on `main`/tags), the gateway `canary` (throwaway k3d in CI; automatic on `main`,
 manual on MRs) and the Duo dispatch jobs. CI does not run `tests/infra/*` or the D1–D15 flows;
 those run against a local cluster (the canary only runs the seed).
+
+## Docs index
+
+| Document                                                       | What it covers                                                       |
+| -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [`docs/RUN_ON_YOUR_COMPUTER.md`](docs/RUN_ON_YOUR_COMPUTER.md) | Plain-language setup guide for a first run                           |
+| [`docs/DESIGN.md`](docs/DESIGN.md)                             | Components, call path, data model, naming, failure isolation, chart  |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)                 | Threats, mitigations, residual risks, what is not done               |
+| [`docs/NETWORK_POLICIES.md`](docs/NETWORK_POLICIES.md)         | Default-deny NetworkPolicies and non-root containers: recorded tests |
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)                 | Requirement IDs (K, W, G, T, C, D, R, H, O)                          |
+| [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md) | Each requirement mapped to code, tests and docs; known limitations   |
+| [`docs/HACKATHON.md`](docs/HACKATHON.md)                       | The self-healing release pipeline on GitLab                          |
+| [`docs/adr/`](docs/adr/)                                       | Architecture decision records 000–015                                |
 
 ## License
 
