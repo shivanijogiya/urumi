@@ -246,6 +246,7 @@ kc get ns store-d15lim >/dev/null 2>&1 && fail "a namespace was created over the
 note "limit: $(err_of)"
 code=$(jq -n '{slug: "woo", name: "x", adminEmail: "x@example.com"}' | api "$ADMIN_JAR" POST /api/stores)
 [ "$code" = 400 ] || fail "reserved slug woo -> HTTP $code"
+err_of | grep -q 'reserved' || fail "reserved slug error is unclear: $(err_of)"
 note "reserved slug: $(err_of)"
 
 # ── 8. Delete (gateway restarted mid-delete) ─────────────────────────────────────────────────

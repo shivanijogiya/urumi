@@ -4,7 +4,12 @@
 // disables the upstream at once (tools vanish), then the provisioner removes the namespace and,
 // once it is gone, the rules and rows. No password or secret is ever in a request or response.
 import { randomUUID } from 'node:crypto';
-import { CreateStoreRequestSchema, ROUTES } from '@urumi/contracts';
+import {
+  CreateStoreRequestSchema,
+  RESERVED_STORE_SLUGS,
+  ROUTES,
+  STORE_SLUG_RE,
+} from '@urumi/contracts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { currentUser, requireAdmin } from '../auth/session.js';
@@ -39,6 +44,19 @@ export interface StoreRouteOptions {
   domainSuffix: string;
   scheme: 'http' | 'https';
   builtIn: { name: string; slug: string; storefrontUrl: string } | null;
+}
+
+/** A clear message for the most common mistake (fixed text: the input is never echoed). */
+export function slugProblem(body: unknown): string | null {
+  const slug = (body as { slug?: unknown } | null)?.slug;
+  if (typeof slug !== 'string') return null;
+  if (RESERVED_STORE_SLUGS.includes(slug)) {
+    return 'Invalid slug: this name is reserved (gateway, woo, everything, default, … are taken by the platform)';
+  }
+  if (!STORE_SLUG_RE.test(slug)) {
+    return 'Invalid slug: use 2–20 lowercase letters, digits or hyphens, starting with a letter (DNS label)';
+  }
+  return null;
 }
 
 const notEnabled = () =>
@@ -76,6 +94,8 @@ export function registerStoreRoutes(app: FastifyInstance, opts: StoreRouteOption
 
   app.post(ROUTES.createStore.path, { preHandler: requireAdmin }, async (req, reply) => {
     if (!opts.provisioner) throw notEnabled();
+    const problem = slugProblem(req.body);
+    if (problem) throw new HttpError('VALIDATION_FAILED', problem);
     const body = parse(CreateStoreRequestSchema, req.body);
     const id = randomUUID();
     await withTransaction(pool, async (tx) => {
