@@ -15,6 +15,7 @@ that implements it.
 | woo-mcp           | `apps/woo-mcp/src`               | Our WooCommerce MCP server: 5 tools over the WooCommerce REST API                                   |
 | server-everything | `apps/everything/Dockerfile`     | MCP reference server 2.0.0, in-cluster, the D7 target                                               |
 | GitLab MCP        | `https://gitlab.com/api/v4/mcp`  | Hosted third-party upstream, fine-grained PAT as bearer                                             |
+| hosted servers    | `apps/gateway/src/hosted`        | Admin-added container images the gateway runs in `urumi-hosted` and registers (ADR 014)             |
 | contracts         | `packages/contracts/src`, `sql/` | zod schemas shared by all of the above; SQL migration                                               |
 | chart             | `charts/platform`                | One Helm chart for every workload                                                                   |
 
@@ -413,6 +414,23 @@ and `values-prod.yaml` (README "Local → VPS").
   `ServiceMonitor` (off). The admin **Health / Metrics** page computes per-server calls, error
   rate and p50/p95 from `audit_log` (all replicas) and shows each upstream's classified last
   failure and last success.
+- **Hosted MCP servers** (ADR 014, `templates/hosted/`, `hosted.enabled`, on in both values
+  files): admins add an MCP server by container image (`POST /api/hosted-servers` or the
+  dashboard's "Hosted (container image)" mode). The gateway's reconciler (`hosted/reconciler.ts`,
+  under the Postgres lease `hosted`, so one writer across replicas) server-side-applies a
+  Deployment, ClusterIP Service and optional env Secret `mcp-<slug>[-env]` in namespace
+  `urumi-hosted`, from a pod template fixed in `hosted/manifests.ts` (non-root uid 65532,
+  read-only root + `/tmp` emptyDir, no capabilities, seccomp RuntimeDefault, no SA token, preset
+  requests/limits, TCP probes). When the pod is ready it enables the hosted upstream row
+  (`http://mcp-<slug>.urumi-hosted.svc.cluster.local:<port><path>`) and checks it at once; status
+  Deploying / Connected / Unreachable / Failed (with the pod's reason) is shown on the Upstreams
+  page. The namespace enforces Pod Security `restricted`, a ResourceQuota + LimitRange, default
+  deny with ingress only from the gateway, DNS egress, and internet egress only for servers created
+  with `egress: true`. Images must match `hosted.allowedImages` (prefixes); digests are recorded
+  and can be required (`hosted.requireDigest`, on in prod). The gateway's ServiceAccount has one
+  Role, in `urumi-hosted`: deployments get/list/create/patch/delete, services and secrets
+  create/patch/delete (no secret reads), pods get/list — checked by `tests/infra/hosted-chart.sh`.
+  The gateway talks to the API with `node:https` + its projected token (no client library).
 - **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
   in-cluster upstreams pass the private-address check.
 
@@ -427,6 +445,7 @@ and `values-prod.yaml` (README "Local → VPS").
 | Request/response chat                 | Simple, stateless                                     | No streaming; long tool loops show nothing until done                                    |
 | Metadata-only audit                   | No second store of customer data                      | Cannot replay what a tool was asked; admin actions are not audited                       |
 | Static bearer for GitLab              | No OAuth flow in the gateway                          | Token expiry is manual rotation (update Secret, re-run seed)                             |
+| Hosted servers: allow-list + digest   | No admission controller to install; works on any k3s  | No image signature check (cosign) or scan; egress is all-or-nothing internet (ADR 014)   |
 
 With more time: terminate upstream MCP sessions (`DELETE`) after each operation; stream-cap
 response bodies before parsing; audit admin actions; move the chat limit and login throttle to

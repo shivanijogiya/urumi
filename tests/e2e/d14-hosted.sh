@@ -8,7 +8,9 @@
 #      direct call is refused (FORBIDDEN) until a permission grants d14 echo; then B's call works
 #      and both are audited (denied + ok);
 #   3. a pod in the hosted namespace (with the hosted labels) resolves DNS but cannot reach
-#      Postgres, woo-mcp, WordPress, MariaDB, the cloud metadata IP, or the hosted server itself;
+#      Postgres, woo-mcp, WordPress, MariaDB, the gateway, the cloud metadata IP or the hosted
+#      server itself; a privileged pod is rejected (Pod Security restricted); the gateway's
+#      ServiceAccount can manage Deployments in the hosted namespace and nothing else checked;
 #   4. an image off the allow-list is rejected (400, clear message);
 #   5. an allowed-prefix image that does not exist shows `failed` with ImagePullBackOff;
 #   6. deleting both removes every Kubernetes object and the upstream rows (tools gone).
@@ -172,12 +174,31 @@ kh wait --for=condition=Ready "pod/$PROBE" --timeout=90s >/dev/null || fail "pro
 reach() { kh exec "$PROBE" -- nc -z -w 3 "$1" "$2" >/dev/null 2>&1; }
 kh exec "$PROBE" -- nslookup "$RELEASE-postgres.$NS.svc.cluster.local" >/dev/null 2>&1 ||
   fail "probe cannot resolve DNS (DNS egress must stay allowed)"
+# Positive control: the probe's nc does connect where policy allows it (DNS over TCP).
+reach kube-dns.kube-system.svc.cluster.local 53 || fail "probe cannot reach DNS over TCP (nc control failed)"
 for target in "$RELEASE-postgres.$NS.svc.cluster.local:5432" "$RELEASE-woo-mcp.$NS.svc.cluster.local:8080" \
   "$RELEASE-wordpress.$NS.svc.cluster.local:80" "$RELEASE-mariadb.$NS.svc.cluster.local:3306" \
   "$RELEASE-gateway.$NS.svc.cluster.local:8080" "169.254.169.254:80" "mcp-$SLUG.$HNS.svc.cluster.local:3001"; do
   if reach "${target%:*}" "${target##*:}"; then fail "hosted-namespace pod reached $target"; fi
   note "blocked from $HNS: $target"
 done
+
+# Pod Security `restricted` is enforced by the API server itself, whoever asks.
+psa=$(kh run "d14-priv-$SUFFIX" --image "$probe_image" --restart Never \
+  --overrides '{"spec":{"containers":[{"name":"p","image":"'"$probe_image"'","securityContext":{"privileged":true}}]}}' 2>&1)
+kh delete pod "d14-priv-$SUFFIX" --wait=false --ignore-not-found >/dev/null 2>&1
+printf '%s' "$psa" | grep -q 'violates PodSecurity' || fail "a privileged pod was not rejected in $HNS: $psa"
+note "privileged pod in $HNS: rejected (violates PodSecurity restricted)"
+# The gateway's ServiceAccount: hosted namespace only, minimal verbs.
+SA="system:serviceaccount:$NS:$RELEASE-gateway"
+can() { kubectl --context "$KCTX" auth can-i --as "$SA" "$@" 2>/dev/null; }
+[ "$(can create deployments -n "$HNS")" = yes ] || fail "gateway SA cannot create deployments in $HNS"
+for q in "create deployments -n $NS" "get secrets -n $HNS" "list secrets -n $HNS" "create pods -n $HNS" \
+  "create pods/exec -n $HNS" "create roles -n $HNS" "list deployments -A" "get secrets -n $NS"; do
+  # shellcheck disable=SC2086 # $q is a list of words
+  [ "$(can $q)" = no ] || fail "gateway SA can: $q"
+done
+note "gateway SA: create deployments in $HNS only; no secret reads, pods/exec, RBAC or other namespaces"
 
 # ── 4. Disallowed image ──────────────────────────────────────────────────────────────────────
 code=$(jq -n '{slug: "d14evil", name: "evil", image: "ghcr.io/evil/mcp-server:latest", port: 8080}' |
