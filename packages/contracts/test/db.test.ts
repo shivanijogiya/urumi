@@ -67,3 +67,19 @@ describe('005_oauth.sql', () => {
     expect(oauth).toContain('CHECK (api_key_id IS NULL OR oauth_grant_id IS NULL)');
   });
 });
+
+describe('006_hosted.sql', () => {
+  const hosted = readFileSync(join(MIGRATIONS_DIR, '006_hosted.sql'), 'utf8');
+  it('adds hosted_servers (1:1 with upstreams) and the upstreams.hosted flag, additive only', () => {
+    expect(hosted).toContain(
+      'ALTER TABLE upstreams ADD COLUMN hosted boolean NOT NULL DEFAULT false',
+    );
+    expect(hosted).toMatch(/CREATE TABLE hosted_servers \(/);
+    expect(hosted).toMatch(/id\s+uuid PRIMARY KEY REFERENCES upstreams ON DELETE CASCADE/);
+    expect(hosted).not.toMatch(/\bDROP\b/);
+  });
+  it('stores env values only sealed (no plaintext column)', () => {
+    expect(hosted).toMatch(/env_ciphertext\s+bytea/);
+    expect(hosted).not.toMatch(/env_values|env_plain|env\s+(jsonb|text)\b/);
+  });
+});

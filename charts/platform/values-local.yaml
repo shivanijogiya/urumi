@@ -104,3 +104,11 @@ gatewayCanary:
 networkPolicy:
   enabled: true
   wordpressInternetEgress: true
+
+# Hosted MCP servers (ADR 014): the local registry (where scripts/build-images.sh pushes, e.g. the
+# urumi-everything demo image) and Docker Hub's official mcp/ namespace.
+hosted:
+  enabled: true
+  allowedImages:
+    - k3d-urumi-registry.localhost:5005/
+    - docker.io/mcp/

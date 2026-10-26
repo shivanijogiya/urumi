@@ -19,6 +19,11 @@ metadata:
     track: {{ .track }}
 spec:
   automountServiceAccountToken: false
+  {{- if $.Values.hosted.enabled }}
+  # Hosted MCP servers (ADR 014): this ServiceAccount's only rights are a Role in the hosted
+  # namespace. Its token is projected below (not automounted) and only while hosted.enabled.
+  serviceAccountName: {{ include "platform.gatewayServiceAccount" $ }}
+  {{- end }}
   # Soft rules (ADR 010): spread replicas over nodes when possible, never block scheduling.
   affinity:
     podAntiAffinity:
@@ -122,6 +127,23 @@ spec:
               name: {{ $.Values.secretName }}
               key: {{ $.Values.wooMcp.secretKeys.sharedSecret }}
         {{- end }}
+        {{- with $.Values.hosted }}
+        {{- if .enabled }}
+        # Hosted MCP servers (ADR 014): Deployments/Services/Secrets in this namespace only.
+        - name: HOSTED_ENABLED
+          value: "true"
+        - name: HOSTED_NAMESPACE
+          value: {{ include "platform.hosted.namespace" $ | quote }}
+        - name: HOSTED_SERVICE_ACCOUNT
+          value: {{ .serviceAccountName | quote }}
+        - name: HOSTED_ALLOWED_IMAGES
+          value: {{ join "," (.allowedImages | default list) | quote }}
+        - name: HOSTED_REQUIRE_DIGEST
+          value: {{ .requireDigest | quote }}
+        - name: HOSTED_MAX_SERVERS
+          value: {{ .maxServers | int | quote }}
+        {{- end }}
+        {{- end }}
         # Internal Prometheus listener (ADR 011); 0 = off.
         - name: METRICS_PORT
           value: {{ ternary $v.metrics.port 0 (and $v.metrics.enabled true) | quote }}
@@ -187,10 +209,30 @@ spec:
         # The root filesystem is read-only; give Node a writable /tmp.
         - name: tmp
           mountPath: /tmp
+        {{- if $.Values.hosted.enabled }}
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        {{- end }}
   volumes:
     - name: tmp
       emptyDir:
         sizeLimit: 64Mi
+    {{- if $.Values.hosted.enabled }}
+    # Short-lived token (rotated by the kubelet; the gateway re-reads it per request) + cluster CA.
+    - name: kube-api-access
+      projected:
+        defaultMode: 0444
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: ca.crt
+    {{- end }}
 {{- end }}
 
 {{/*

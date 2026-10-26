@@ -1,0 +1,66 @@
+{{- if .Values.hosted.enabled }}
+{{- $ns := include "platform.hosted.namespace" . }}
+# ServiceAccount of the gateway pods. No automatic token: the gateway pod template projects one
+# (1 h, rotated by the kubelet) only while hosted.enabled. Its ONLY permissions are the Role below,
+# bound in the hosted namespace; it has no rights in the release namespace or cluster-wide.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "platform.gatewayServiceAccount" . }}
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "gateway") | nindent 4 }}
+automountServiceAccountToken: false
+---
+# The identity hosted pods run as: no token, no RoleBinding, no permissions at all.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.hosted.serviceAccountName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+# Minimal and namespace-scoped (a Role, never a ClusterRole): write exactly the three kinds the
+# reconciler manages, read pods for status. No pods/exec, pods/log, pods create, no RBAC objects,
+# no ServiceAccounts, no NetworkPolicies, no get/list/watch on Secrets (the gateway can create,
+# update and delete the env Secrets it writes, but cannot read any Secret back from the API).
+# `create` + `patch` are what server-side apply needs; `get`/`list` on Deployments drive status and
+# garbage collection.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "hosted-manager") }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "hosted-manager") }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "platform.componentName" (dict "ctx" $ "component" "hosted-manager") }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform.gatewayServiceAccount" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

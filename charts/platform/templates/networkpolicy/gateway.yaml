@@ -36,5 +36,24 @@ spec:
         - protocol: TCP
           port: 3001
     {{- end }}
+    {{- if .Values.hosted.enabled }}
+    # Hosted MCP servers (ADR 014): the pods the gateway runs (any port: each server has its own)…
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "platform.hosted.namespace" . }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: urumi-gateway
+    # …and the Kubernetes API that creates them (same rule as the bootstrap Job; narrow kubeApi.cidr).
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.kubeApi.cidr }}
+      ports:
+        {{- range .Values.networkPolicy.kubeApi.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
     {{- include "platform.np.internetEgress" . | nindent 4 }}
 {{- end }}

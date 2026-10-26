@@ -1,0 +1,15 @@
+{{- if and .Values.hosted.enabled .Values.hosted.createNamespace }}
+# Namespace for hosted MCP servers (ADR 014). Pod Security Admission `restricted` is ENFORCED: the
+# API server itself rejects any pod that is privileged, runs as root, keeps capabilities, mounts host
+# paths or lacks seccomp — whatever the gateway (or anyone with its token) asks for.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "platform.hosted.namespace" . }}
+  labels:
+    {{- include "platform.hosted.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+{{- end }}

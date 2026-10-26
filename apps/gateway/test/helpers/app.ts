@@ -8,7 +8,7 @@ import { migrate } from '../../src/db/migrate.js';
 import { createPool } from '../../src/db/pool.js';
 import { seedAdmin } from '../../src/db/seed.js';
 import { buildApp, type AppDeps } from '../../src/server.js';
-import { freshDatabase } from './db.js';
+import { dropDatabase, freshDatabase } from './db.js';
 
 export const ADMIN = { email: 'admin@example.com', password: 'first-admin-password' };
 export const PUBLIC_ORIGIN = 'http://app.localtest.me';
@@ -49,7 +49,8 @@ export async function setupApp(
   deps: Partial<AppDeps> = {},
   opts: SetupOptions = {},
 ): Promise<TestApp> {
-  const pool = createPool(await freshDatabase());
+  const db = await freshDatabase();
+  const pool = createPool(db);
   await migrate(pool, MIGRATIONS_DIR);
   await seedAdmin(pool, ADMIN);
   if ((opts.toolPermissions ?? 'open') === 'open') {
@@ -93,6 +94,7 @@ export async function setupApp(
     close: async () => {
       await app.close();
       await pool.end();
+      await dropDatabase(db);
     },
   };
 }

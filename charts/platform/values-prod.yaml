@@ -99,3 +99,11 @@ networkPolicy:
   kubeApi:
     cidr: 0.0.0.0/0
   wordpressInternetEgress: true
+
+# Hosted MCP servers (ADR 014): on, with digest pinning and only this project's own registry path
+# allowed. Replace the prefix with your registry; add e.g. docker.io/mcp/ deliberately.
+hosted:
+  enabled: true
+  requireDigest: true
+  allowedImages:
+    - registry.gitlab.com/<group>/<project>/
