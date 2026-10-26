@@ -30,32 +30,44 @@ export interface HealthMonitorDeps {
   timeoutMs?: number;
   /** Run ticks only while holding this lease (several replicas). Absent: every tick runs. */
   lease?: Lease;
+  /**
+   * A failed ping is retried once after this delay, within the same tick, before the upstream is
+   * marked down: a sub-second network blip (pod churn, NetworkPolicy resync) must not hide an
+   * upstream's tools for a whole interval. Default 1 s; 0 = no retry.
+   */
+  retryDelayMs?: number;
 }
 
 export class HealthMonitor {
   readonly intervalMs: number;
   readonly timeoutMs: number;
+  readonly retryDelayMs: number;
   private timer: NodeJS.Timeout | undefined;
   private running: Promise<unknown> | undefined;
   private stopped = true;
   /** Whether the last tick held the lease (always true without a lease). */
   leader = false;
+  /** Set by stop(): a tick in progress skips its retries. */
+  private shuttingDown = false;
 
   constructor(private readonly deps: HealthMonitorDeps) {
     this.intervalMs = deps.intervalMs ?? MCP_TIMEOUTS.healthIntervalMs;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_LIST_TIMEOUT_MS;
+    this.retryDelayMs = deps.retryDelayMs ?? 1000;
   }
 
   /** First tick right away, then every intervalMs after the previous tick ends. */
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
+    this.shuttingDown = false;
     this.schedule(0);
   }
 
   /** Stops the loop and waits for a tick in progress. */
   async stop(): Promise<void> {
     this.stopped = true;
+    this.shuttingDown = true;
     clearTimeout(this.timer);
     await this.running;
     if (this.deps.lease && this.leader) {
@@ -105,7 +117,18 @@ export class HealthMonitor {
     let status: 'up' | 'down' = 'up';
     let lastError: string | null = null;
     try {
-      await this.deps.registry.refresh(row, this.timeoutMs);
+      try {
+        await this.deps.registry.refresh(row, this.timeoutMs);
+      } catch (first) {
+        // Already down: no second chance needed. Otherwise retry once before marking it down.
+        if (row.status === 'down' || this.retryDelayMs <= 0 || this.shuttingDown) throw first;
+        this.deps.log.info(
+          { upstream: row.slug, reason: first instanceof UpstreamError ? first.detail : 'error' },
+          'health check failed; retrying once',
+        );
+        await new Promise((r) => setTimeout(r, this.retryDelayMs));
+        await this.deps.registry.refresh(row, this.timeoutMs);
+      }
     } catch (err) {
       status = 'down';
       lastError = (err instanceof UpstreamError ? err.detail : 'Check failed').slice(

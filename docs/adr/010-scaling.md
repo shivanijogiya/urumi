@@ -42,6 +42,10 @@ writes. A clean shutdown deletes the lease, so another replica takes over on its
   (`SELECT * FROM gateway_leases`), testable, and survives connection churn.
 - Chosen over "every replica checks, DB is the source of truth": that doubles upstream pings and
   makes `last_error` alternate between two replicas' views (e.g. one sees DNS fail, one times out).
+- A failed ping is retried once, 1 s later, within the same tick before the upstream is marked
+  `down`. Found by D10: deleting a pod made the leader's pings to all three upstreams time out
+  at once (pod churn + NetworkPolicy resync on a loaded node), hiding every tool for one
+  interval. The retry adds ≤ 4 s to down-detection (D7 still requires ≤ 25 s).
 - Followers keep correct behaviour without pinging: `listTools` and `callTool` read the row's
   `status` from Postgres on every request, so a `down` written by the leader hides the tools on
   every replica at once; followers fill their tool caches on demand (30 s TTL).
