@@ -51,7 +51,8 @@ it.each([
   ['postgres', `http://urumi-postgres.${SVC}:5432`],
   ['mariadb', `http://urumi-mariadb.${SVC}:3306`],
   ['wordpress', `http://urumi-wordpress.${SVC}/wp-json/wc/v3/orders`],
-  ['gateway', `http://urumi-gateway.${SVC}/api/users`],
+  // Slug `gateway` is reserved (ADR 012); the target is still the gateway's own Service.
+  ['gw-self', `http://urumi-gateway.${SVC}/api/users`],
 ])('rejects other in-cluster Services (%s) with SSRF_BLOCKED', async (slug, url) => {
   const res = await register(slug, url);
   expect(res.statusCode, res.body).toBe(400);
