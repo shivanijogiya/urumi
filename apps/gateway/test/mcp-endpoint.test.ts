@@ -113,7 +113,7 @@ function post(authorization: string | undefined, body: unknown = INITIALIZE): Pr
 
 async function expect401(res: Response): Promise<string> {
   expect(res.status).toBe(401);
-  expect(res.headers.get('www-authenticate')).toBe('Bearer');
+  expect(res.headers.get('www-authenticate')).toMatch(/^Bearer resource_metadata="[^"]+"/);
   const text = await res.text();
   expect(ErrorEnvelopeSchema.parse(JSON.parse(text)).error.code).toBe('UNAUTHENTICATED');
   return text;

@@ -51,3 +51,19 @@ describe('004_observability.sql', () => {
     expect(obs).not.toMatch(/\bDROP\b/);
   });
 });
+
+describe('005_oauth.sql', () => {
+  const oauth = readFileSync(join(MIGRATIONS_DIR, '005_oauth.sql'), 'utf8');
+  it.each(['oauth_clients', 'oauth_auth_requests', 'oauth_grants', 'oauth_codes', 'oauth_tokens'])(
+    'creates %s',
+    (table) => expect(oauth).toMatch(new RegExp(`CREATE TABLE ${table} \\(`)),
+  );
+  it('stores codes and tokens only as hashes', () => {
+    expect(oauth).toMatch(/code_hash\s+bytea PRIMARY KEY/);
+    expect(oauth).toMatch(/token_hash bytea PRIMARY KEY/);
+    expect(oauth).not.toMatch(/\b(access_token|refresh_token|code|client_secret)\s+text/);
+  });
+  it('attributes audit rows to at most one credential', () => {
+    expect(oauth).toContain('CHECK (api_key_id IS NULL OR oauth_grant_id IS NULL)');
+  });
+});

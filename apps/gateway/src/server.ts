@@ -20,6 +20,13 @@ import { registerKeyRoutes } from './keys/routes.js';
 import { registerMcpEndpoint } from './mcp/endpoint.js';
 import type { GatewayMetrics } from './metrics/metrics.js';
 import { registerMetricsRoutes } from './metrics/summary.js';
+import { registerConsentRoutes } from './oauth/consent-routes.js';
+import {
+  registerOAuthRoutes,
+  resourceMetadataUrl,
+  resourceUrl,
+  type OAuthLimits,
+} from './oauth/routes.js';
 import { registerPermissionRoutes } from './permissions/routes.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { PgTokenBucket, type McpRateLimits } from './ratelimit/bucket.js';
@@ -80,6 +87,11 @@ export interface AppDeps {
   mcpRateLimits?: McpRateLimits;
   /** Prometheus metrics (ADR 011); main.ts serves them on the internal port. Default: none. */
   metrics?: GatewayMetrics;
+  /**
+   * OAuth 2.1 for MCP clients (ADR 013); the issuer is publicOrigin. `redirectSchemes`: extra
+   * private-use redirect URI schemes (OAUTH_REDIRECT_SCHEMES). `limits`: tests shrink them.
+   */
+  oauth?: { redirectSchemes?: readonly string[]; limits?: Partial<OAuthLimits> };
 }
 
 /**
@@ -160,7 +172,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return reply.code(500).send(makeError('INTERNAL', 'Internal error'));
   });
 
-  registerCsrfGuard(app, deps.publicOrigin ?? 'http://app.localtest.me');
+  const publicOrigin = deps.publicOrigin ?? 'http://app.localtest.me';
+  registerCsrfGuard(app, publicOrigin);
   registerAuthRoutes(app, {
     email: new LoginLimiter(),
     ip: new LoginLimiter({ maxFailures: IP_MAX_FAILURES }),
@@ -211,7 +224,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       : undefined,
     audit: writeAudit,
     onRateLimited: deps.metrics ? (scope) => deps.metrics!.observeRateLimited(scope) : undefined,
+    oauth: {
+      resource: resourceUrl(publicOrigin),
+      resourceMetadataUrl: resourceMetadataUrl(publicOrigin),
+    },
   });
+  registerOAuthRoutes(app, {
+    issuer: publicOrigin,
+    redirectPolicy: { extraSchemes: deps.oauth?.redirectSchemes ?? [] },
+    bucket: new PgTokenBucket(deps.pool),
+    ...(deps.oauth?.limits ? { limits: deps.oauth.limits } : {}),
+  });
+  registerConsentRoutes(app, { issuer: publicOrigin });
   registerMetricsRoutes(app);
   const anthropic = deps.chat?.anthropic;
   registerChatRoutes(app, {

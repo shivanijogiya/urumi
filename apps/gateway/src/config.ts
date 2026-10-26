@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { z } from 'zod';
 import { DEFAULT_CHAT_MODEL } from './chat/service.js';
+import { parseRedirectSchemes } from './oauth/redirect.js';
 
 /** Optional string; an empty value counts as unset. */
 const optional = () => z.preprocess((v) => (v === '' ? undefined : v), z.string().optional());
@@ -117,6 +118,23 @@ const EnvSchema = z.object({
   MCP_RATE_LIMIT_KEY_BURST: count(60),
   MCP_RATE_LIMIT_USER_PER_MIN: count(240),
   MCP_RATE_LIMIT_USER_BURST: count(120),
+  // OAuth (ADR 013): extra private-use redirect URI schemes MCP clients may register, comma-
+  // separated (e.g. `cursor`). https and loopback http are always allowed; nothing else by default.
+  OAUTH_REDIRECT_SCHEMES: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .default('')
+      .refine((v) => {
+        try {
+          parseRedirectSchemes(v);
+          return true;
+        } catch {
+          return false;
+        }
+      }, 'must be comma-separated URI schemes (not http, https, javascript, data, file)')
+      .transform(parseRedirectSchemes),
+  ),
   // Chat discovery mode (ADR 012): above this many permitted tools the model gets only
   // gateway__search_tools + gateway__call_tool. 0 = always discovery.
   CHAT_DISCOVERY_THRESHOLD: count(40),
@@ -179,6 +197,8 @@ export interface Config {
   metricsPort: number;
   /** Chat switches to discovery mode above this many tools. */
   chatDiscoveryThreshold: number;
+  /** OAUTH_REDIRECT_SCHEMES (lowercase). */
+  oauthRedirectSchemes: string[];
 }
 
 export class ConfigError extends Error {
@@ -232,6 +252,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     podName: e.POD_NAME ?? hostname(),
     metricsPort: e.METRICS_PORT,
     chatDiscoveryThreshold: e.CHAT_DISCOVERY_THRESHOLD,
+    oauthRedirectSchemes: e.OAUTH_REDIRECT_SCHEMES,
   };
 }
 

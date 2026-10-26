@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ErrorCodeSchema } from './errors.js';
 import { FailureReasonSchema } from './failures.js';
 import { RESERVED_SLUGS, SLUG_RE } from './naming.js';
+import { AuthMethodSchema } from './oauth.js';
 
 // Request schemas are strict (unknown fields → VALIDATION_FAILED); timestamps are ISO-8601 UTC strings.
 const id = z.uuid();
@@ -41,6 +42,12 @@ export const ROUTES = {
   deletePermission: { method: 'DELETE', path: '/api/permissions/:id', auth: 'admin' },
   metricsSummary: { method: 'GET', path: '/api/metrics/summary', auth: 'admin' },
   chat: { method: 'POST', path: '/api/chat', auth: 'session' },
+  // OAuth consent (ADR 013); the OAuth endpoints themselves are OAUTH_PATHS in oauth.ts.
+  getOAuthRequest: { method: 'GET', path: '/api/oauth/requests/:id', auth: 'session' },
+  decideOAuthRequest: { method: 'POST', path: '/api/oauth/requests/:id', auth: 'session' },
+  /** Members: their own connected apps; admins: everyone's. */
+  listConnectedApps: { method: 'GET', path: '/api/connected-apps', auth: 'session' },
+  revokeConnectedApp: { method: 'DELETE', path: '/api/connected-apps/:id', auth: 'session' },
 } as const satisfies Record<string, Route>;
 
 // ── Auth and users ───────────────────────────────────────────────────────────────────────────
@@ -192,6 +199,10 @@ export const AuditEntrySchema = z.object({
   /** Why the call failed, fixed vocabulary (ADR 011); null for ok. */
   errorDetail: z.string().nullable(),
   errorReason: FailureReasonSchema.nullable(),
+  /** api_key / oauth (MCP) or session (chat), ADR 013. */
+  authMethod: AuthMethodSchema,
+  /** Registered name of the OAuth client, for authMethod oauth; otherwise null. */
+  oauthClientName: z.string().nullable(),
 });
 export const AuditListResponseSchema = z.object({
   items: z.array(AuditEntrySchema),

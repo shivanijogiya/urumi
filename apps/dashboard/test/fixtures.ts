@@ -93,6 +93,8 @@ export function auditEntry(id: string, overrides: Partial<AuditEntry> = {}): Aud
     errorCode: null,
     errorDetail: null,
     errorReason: null,
+    authMethod: 'session',
+    oauthClientName: null,
     ...overrides,
   });
 }

@@ -1,14 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { ApiError, api, errorMessage } from '../api.js';
-import { ME_KEY } from '../auth.js';
+import { ME_KEY, safeNext } from '../auth.js';
 
 // One message for unknown email, wrong password, and disabled account alike.
 const BAD_CREDENTIALS = 'Invalid email or password.';
 
 export function Login() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = safeNext(params.get('next'));
   const client = useQueryClient();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,7 +18,7 @@ export function Login() {
     mutationFn: api.login,
     onSuccess: (user) => {
       client.setQueryData(ME_KEY, user);
-      navigate('/upstreams', { replace: true });
+      navigate(next ?? '/upstreams', { replace: true });
     },
   });
 
@@ -31,6 +33,7 @@ export function Login() {
     <main className="login">
       <form className="card" onSubmit={submit}>
         <h1>Sign in</h1>
+        {next && <p className="muted">Sign in to connect an app to Urumi.</p>}
         <label>
           Email
           <input

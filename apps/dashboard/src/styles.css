@@ -560,3 +560,17 @@ ul.plain {
   color: var(--muted);
   font-size: 0.85em;
 }
+
+/* OAuth consent (ADR 013) */
+.card.consent {
+  width: min(480px, 92vw);
+}
+
+.card.consent ul {
+  padding-left: 1.1rem;
+}
+
+.card.consent .actions {
+  display: flex;
+  gap: 0.75rem;
+}
