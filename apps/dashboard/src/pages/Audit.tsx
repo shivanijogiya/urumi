@@ -138,7 +138,17 @@ export function Audit() {
                 <tr key={a.id}>
                   <td>{formatTime(a.startedAt)}</td>
                   {isAdmin && <td>{a.userEmail}</td>}
-                  <td>{a.source}</td>
+                  <td>
+                    {a.source}
+                    {a.source === 'mcp' && (
+                      <span className="muted">
+                        {' · '}
+                        {a.authMethod === 'oauth'
+                          ? `OAuth: ${a.oauthClientName ?? 'app'}`
+                          : 'API key'}
+                      </span>
+                    )}
+                  </td>
                   <td>{a.serverSlug}</td>
                   <td>
                     <code>{a.tool}</code>

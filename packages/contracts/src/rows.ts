@@ -61,4 +61,29 @@ export interface AuditLogRow {
   error_code: string | null;
   /** Fixed-vocabulary failure detail (004_observability.sql); null for ok. */
   error_detail: string | null;
+  /** OAuth grant of an /mcp call made with an access token (005_oauth.sql); else null. */
+  oauth_grant_id: string | null;
+}
+
+/** 005_oauth.sql (ADR 013). Hash columns never leave the gateway's repo modules. */
+export interface OAuthClientRow {
+  id: string;
+  client_name: string;
+  redirect_uris: string[];
+  token_endpoint_auth_method: 'none' | 'client_secret_post' | 'client_secret_basic';
+  secret_hash: Buffer | null;
+  created_at: Date;
+}
+
+export interface OAuthGrantRow {
+  id: string;
+  client_id: string;
+  user_id: string;
+  scope: string;
+  resource: string;
+  created_at: Date;
+  activated_at: Date | null;
+  last_used_at: Date | null;
+  revoked_at: Date | null;
+  revoke_reason: 'user' | 'admin' | 'client' | 'refresh_reuse' | 'code_reuse' | null;
 }

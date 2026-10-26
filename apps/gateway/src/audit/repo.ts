@@ -13,8 +13,8 @@ export async function insertAudit(db: Db, r: CallRecord): Promise<void> {
   await db.query(
     `INSERT INTO audit_log
        (user_id, api_key_id, source, server_slug, tool, started_at, duration_ms, outcome, error_code,
-        error_detail)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        error_detail, oauth_grant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       r.userId,
       r.apiKeyId,
@@ -26,6 +26,7 @@ export async function insertAudit(db: Db, r: CallRecord): Promise<void> {
       r.outcome,
       r.errorCode,
       r.errorDetail?.slice(0, 200) ?? null,
+      r.oauthGrantId ?? null,
     ],
   );
 }
@@ -87,6 +88,9 @@ interface AuditListRow {
   outcome: Outcome;
   error_code: ErrorCode | null;
   error_detail: string | null;
+  api_key_id: string | null;
+  oauth_grant_id: string | null;
+  oauth_client_name: string | null;
 }
 
 function toEntry(row: AuditListRow): AuditEntry {
@@ -103,6 +107,8 @@ function toEntry(row: AuditListRow): AuditEntry {
     errorCode: row.error_code,
     errorDetail: row.error_detail,
     errorReason: classifyFailure(row.error_detail),
+    authMethod: row.oauth_grant_id ? 'oauth' : row.api_key_id ? 'api_key' : 'session',
+    oauthClientName: row.oauth_client_name,
   };
 }
 
@@ -134,8 +140,11 @@ export async function listAudit(
   const { rows } = await db.query<AuditListRow>(
     `SELECT a.id::text AS id, a.user_id, u.email AS user_email, a.source, a.server_slug, a.tool,
             a.started_at, a.duration_ms, a.outcome, a.error_code, a.error_detail,
+            a.api_key_id, a.oauth_grant_id, oc.client_name AS oauth_client_name,
             to_char(a.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS started_key
      FROM audit_log a JOIN users u ON u.id = a.user_id
+       LEFT JOIN oauth_grants og ON og.id = a.oauth_grant_id
+       LEFT JOIN oauth_clients oc ON oc.id = og.client_id
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY a.started_at DESC, a.id DESC
      LIMIT $${params.length}`,

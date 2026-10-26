@@ -152,6 +152,10 @@ erDiagram
 - A CHECK (`upstreams_credential_complete`) keeps the ciphertext, IV, tag and header-name columns
   consistent with `credential_type`.
 - `audit_log.server_slug` is plain text, so deleting an upstream keeps its audit history.
+- OAuth (ADR 013, `005_oauth.sql`): `oauth_clients` (DCR), `oauth_auth_requests` (pending
+  consent, 10 min), `oauth_grants` (one per approval = a connected app = a token family, with
+  `revoked_at` / `revoke_reason`), `oauth_codes` (60 s, single use), `oauth_tokens` (access /
+  refresh, sha256 only), and `audit_log.oauth_grant_id` (at most one of it and `api_key_id`).
 - The first admin is created from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` only when no admin
   exists (`apps/gateway/src/db/seed.ts`); it never updates an existing user.
 
@@ -247,7 +251,7 @@ email and 30 failures per client IP per 15 min; a refusal looks exactly like a w
 and unknown emails cost one scrypt like real ones.
 
 **CSRF** (`apps/gateway/src/http/csrf.ts`). On every POST/PUT/PATCH/DELETE except the `/mcp`
-route: a body must be `application/json` (cross-origin browsers need a preflight for that, which
+route and the cookie-less OAuth endpoints `/oauth/register`, `/oauth/token`, `/oauth/revoke`: a body must be `application/json` (cross-origin browsers need a preflight for that, which
 is never granted) and a present `Origin` must equal `PUBLIC_ORIGIN`.
 
 **Roles.** `requireAdmin` guards upstream create/edit/delete, member management, and other users'
@@ -274,6 +278,35 @@ bytes), returned once by `POST /api/keys`. The DB keeps sha256 (`key_hash`, uniq
 only if not revoked and its user is not disabled. Revoking sets `revoked_at` (own keys, or any
 user's as admin); another user's key id answers 404. `last_used_at` is updated at most once a
 minute, fire-and-forget.
+
+**OAuth for MCP clients** (ADR 013; `apps/gateway/src/oauth/`, dashboard `Consent.tsx`,
+`ConnectedApps.tsx`). The gateway is also an OAuth 2.1 authorization server, so a client given
+only `http://app.localtest.me/mcp` can sign in through the browser instead of using a pasted key:
+
+```mermaid
+sequenceDiagram
+  participant C as MCP client
+  participant G as Gateway
+  participant B as Browser (dashboard)
+  C->>G: POST /mcp (no token)
+  G-->>C: 401 WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"
+  C->>G: GET protected-resource + authorization-server metadata
+  C->>G: POST /oauth/register (DCR: name, loopback redirect)
+  C->>B: open /oauth/authorize?code_challenge(S256)&state&resource
+  B->>G: GET /oauth/authorize → 302 /consent?request=…
+  B->>G: (login if needed) GET /api/oauth/requests/:id → client name, redirect host, consent token
+  B->>G: POST /api/oauth/requests/:id {approve, consentToken} → redirectTo (code, state, iss)
+  B->>C: redirect to http://127.0.0.1:<port>/callback?code…
+  C->>G: POST /oauth/token (code + code_verifier) → access 1 h + refresh 30 d
+  C->>G: POST /mcp Bearer uat_… → same path as API keys (listToolsFor, callTool, audit)
+```
+
+Clients registered with DCR (https or loopback redirect URIs only, rate limited); codes single
+use, 60 s, bound to client + redirect + PKCE; refresh tokens rotate and reuse revokes the grant;
+tokens opaque and stored as sha256. `/mcp` accepts `urk_` API keys or `uat_` access tokens and
+both become a user id; the audit row records the OAuth grant (`authMethod: oauth`, client name).
+**Connected apps** lists grants (members: own; admins: all) and disconnecting deletes their
+tokens immediately. All state is in Postgres, so any replica serves any step.
 
 ## 8. Upstream credentials (G5)
 

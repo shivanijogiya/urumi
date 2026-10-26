@@ -48,12 +48,16 @@ export interface CallOptions {
   source: CallSource;
   /** The API key used by an external MCP client (#15); null/absent for chat. */
   apiKeyId?: string | null;
+  /** The OAuth grant whose access token an external MCP client used (ADR 013); else null. */
+  oauthGrantId?: string | null;
 }
 
 /** What the audit row (#16) is made of. Arguments and results are deliberately absent. */
 export interface CallRecord {
   userId: string;
   apiKeyId: string | null;
+  /** OAuth grant of the access token (ADR 013); null for API keys and chat. */
+  oauthGrantId?: string | null;
   source: CallSource;
   /** Parsed slug; 'unknown' if the name was not qualified. */
   serverSlug: string;
@@ -209,6 +213,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
     const record: CallRecord = {
       userId,
       apiKeyId: opts.apiKeyId ?? null,
+      oauthGrantId: opts.oauthGrantId ?? null,
       source: opts.source,
       serverSlug: parsed?.slug ?? UNKNOWN_SLUG,
       tool: String(parsed?.toolPart ?? qualifiedName).slice(0, MAX_NAME_LEN),

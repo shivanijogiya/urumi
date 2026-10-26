@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     faultInject: config.faultInject,
     mcpRateLimits: config.mcpRateLimits,
     metrics,
+    oauth: { redirectSchemes: config.oauthRedirectSchemes },
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
   if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {

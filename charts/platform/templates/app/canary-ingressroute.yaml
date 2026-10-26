@@ -5,8 +5,8 @@
 {{- fail "gatewayCanary.weight must be 0..100" }}
 {{- end }}
 {{- $ctx := dict "ctx" $ "component" "app" }}
-# Canary traffic split (#23): while the canary is enabled, this Traefik IngressRoute takes /api and
-# /mcp on the app host (explicit priority above the app Ingress's rules) and sends
+# Canary traffic split (#23): while the canary is enabled, this Traefik IngressRoute takes /api,
+# /mcp and the OAuth paths on the app host (explicit priority above the app Ingress's rules) and sends
 # gatewayCanary.weight % of requests to the canary Service, the rest to the stable one (weighted
 # round robin). Disabling the canary deletes it and the app Ingress serves those paths again, so
 # there is no gap. The dashboard (/) stays on the Ingress.
@@ -27,8 +27,9 @@ spec:
     {{- end }}
   routes:
     - kind: Rule
-      # Same paths as the Ingress's Prefix /api and /mcp (a path segment, not a string prefix).
-      match: Host(`{{ .Values.app.host }}`) && PathRegexp(`^/(api|mcp)(/|$)`)
+      # Same paths as the Ingress's gateway prefixes (path segments, not string prefixes): /api,
+      # /mcp, and the OAuth endpoints + discovery documents (ADR 013).
+      match: Host(`{{ .Values.app.host }}`) && (PathRegexp(`^/(api|mcp)(/|$)`) || PathRegexp(`^/(oauth|\.well-known/oauth-(protected-resource|authorization-server))(/|$)`))
       priority: {{ int $c.priority }}
       services:
         - name: {{ include "platform.componentName" (dict "ctx" $ "component" "gateway") }}

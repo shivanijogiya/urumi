@@ -3,6 +3,8 @@
 {{- $gateway := include "platform.componentName" (dict "ctx" $ "component" "gateway") }}
 # The team app host (K5): the gateway's admin/chat API and MCP endpoint, plus the dashboard at /
 # when dashboard.enabled. Longest prefix wins, so /api and /mcp never reach the dashboard.
+# OAuth for MCP clients (ADR 013): /oauth/* and exactly the two OAuth discovery documents under
+# /.well-known go to the gateway too; nothing else under /.well-known is routed to it.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -21,7 +23,7 @@ spec:
     - host: {{ .Values.app.host | quote }}
       http:
         paths:
-          {{- range list "/api" "/mcp" }}
+          {{- range list "/api" "/mcp" "/oauth" "/.well-known/oauth-protected-resource" "/.well-known/oauth-authorization-server" }}
           - path: {{ . }}
             pathType: Prefix
             backend:

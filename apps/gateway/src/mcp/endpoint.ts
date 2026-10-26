@@ -28,6 +28,7 @@ import {
 } from '@urumi/contracts';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateApiKey } from '../auth/api-keys.js';
+import { authenticateAccessToken, looksLikeAccessToken } from '../oauth/bearer.js';
 import type { CallRecord, CallTool } from '../core/call-tool.js';
 import type { RegisteredTool } from '../core/registry.js';
 import type { ListToolsFor } from '../core/visible-tools.js';
@@ -42,7 +43,12 @@ export const MCP_BODY_LIMIT = 1024 * 1024;
 
 interface McpCaller {
   userId: string;
-  keyId: string;
+  /** API key id, or null for an OAuth token. */
+  keyId: string | null;
+  /** OAuth grant id, or null for an API key. */
+  oauthGrantId: string | null;
+  /** Per-credential rate-limit bucket id: the key id, or `oauth:<grant id>`. */
+  limitKey: string;
 }
 
 /**
@@ -112,7 +118,11 @@ function createServer(
     // MCP lets a client omit arguments for a tool without parameters.
     const args = req.params.arguments ?? {};
     try {
-      const opts = { source: 'mcp' as const, apiKeyId: caller.keyId };
+      const opts = {
+        source: 'mcp' as const,
+        apiKeyId: caller.keyId,
+        oauthGrantId: caller.oauthGrantId,
+      };
       // The meta-tools answer in either mode; gateway__call_tool still goes through callTool.
       if (isMetaTool(req.params.name)) {
         return await deps.discovery.handle(caller.userId, req.params.name, args, opts);
@@ -127,11 +137,20 @@ function createServer(
   return mcp;
 }
 
-function sendUnauthenticated(reply: FastifyReply): FastifyReply {
+function sendUnauthenticated(
+  reply: FastifyReply,
+  resourceMetadataUrl: string | undefined,
+  presented: boolean,
+): FastifyReply {
+  // RFC 6750 §3 + RFC 9728 §5.1: where to find the authorization server.
+  const params = [
+    ...(resourceMetadataUrl ? [`resource_metadata="${resourceMetadataUrl}"`] : []),
+    ...(presented ? ['error="invalid_token"'] : []),
+  ];
   return reply
     .code(httpStatusFor('UNAUTHENTICATED'))
-    .header('www-authenticate', 'Bearer')
-    .send(makeError('UNAUTHENTICATED', 'Invalid or missing API key'));
+    .header('www-authenticate', params.length ? `Bearer ${params.join(', ')}` : 'Bearer')
+    .send(makeError('UNAUTHENTICATED', 'Invalid or missing API key or access token'));
 }
 
 /** audit_log server_slug / tool of a refused /mcp request (the body is never read). */
@@ -148,6 +167,24 @@ export interface McpEndpointDeps {
   audit?: ((record: CallRecord) => Promise<void>) | undefined;
   /** Observer of every rate-limited request (metrics). */
   onRateLimited?: ((scope: 'key' | 'user') => void) | undefined;
+  /** OAuth (ADR 013): accept access tokens for this resource and advertise its metadata. */
+  oauth?: { resource: string; resourceMetadataUrl: string } | undefined;
+}
+
+/** API key or OAuth access token → the caller, or null. */
+async function authenticateCaller(
+  app: FastifyInstance,
+  header: string | undefined,
+  oauth: McpEndpointDeps['oauth'],
+): Promise<McpCaller | null> {
+  if (oauth && looksLikeAccessToken(header)) {
+    const t = await authenticateAccessToken(app.pool, header, oauth.resource);
+    return t
+      ? { userId: t.user.id, keyId: null, oauthGrantId: t.grantId, limitKey: `oauth:${t.grantId}` }
+      : null;
+  }
+  const k = await authenticateApiKey(app.pool, header);
+  return k ? { userId: k.user.id, keyId: k.keyId, oauthGrantId: null, limitKey: k.keyId } : null;
 }
 
 export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps): void {
@@ -157,24 +194,31 @@ export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps)
   // us parse 1 MB.
   const authenticate = async (req: FastifyRequest, reply: FastifyReply) => {
     // Postgres errors propagate to the error handler as a 500: never a 401 for a valid key.
-    const auth = await authenticateApiKey(app.pool, req.headers.authorization);
-    if (!auth) return sendUnauthenticated(reply);
-    req.mcpCaller = { userId: auth.user.id, keyId: auth.keyId };
+    const header = req.headers.authorization;
+    const auth = await authenticateCaller(app, header, deps.oauth);
+    if (!auth) return sendUnauthenticated(reply, deps.oauth?.resourceMetadataUrl, !!header);
+    req.mcpCaller = auth;
     if (!deps.rateLimit) return;
     const startedAt = new Date();
     const decision = await checkMcpLimits(deps.rateLimit.bucket, deps.rateLimit.limits, {
-      keyId: auth.keyId,
-      userId: auth.user.id,
+      keyId: auth.limitKey,
+      userId: auth.userId,
     });
     if (decision.allowed) return;
     req.log.warn(
-      { userId: auth.user.id, keyId: auth.keyId, scope: decision.scope },
+      {
+        userId: auth.userId,
+        keyId: auth.keyId,
+        oauthGrantId: auth.oauthGrantId,
+        scope: decision.scope,
+      },
       'mcp request rate limited',
     );
     deps.onRateLimited?.(decision.scope ?? 'key');
     await deps.audit?.({
-      userId: auth.user.id,
+      userId: auth.userId,
       apiKeyId: auth.keyId,
+      oauthGrantId: auth.oauthGrantId,
       source: 'mcp',
       serverSlug: RATE_LIMITED_SLUG,
       tool: RATE_LIMITED_TOOL,
@@ -188,7 +232,8 @@ export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps)
           : FAILURE_DETAILS.rateLimitedKey,
       resolved: false,
     });
-    const scope = decision.scope === 'user' ? 'this user' : 'this API key';
+    const scope =
+      decision.scope === 'user' ? 'this user' : auth.keyId ? 'this API key' : 'this connected app';
     return reply
       .code(httpStatusFor('RATE_LIMITED'))
       .header('retry-after', String(decision.retryAfterSeconds))

@@ -8,6 +8,7 @@ import {
   ChangePasswordRequestSchema,
   ChatRequestSchema,
   ChatResponseSchema,
+  ConnectedAppListResponseSchema,
   CreateKeyRequestSchema,
   CreateKeyResponseSchema,
   CreateUpstreamRequestSchema,
@@ -16,6 +17,9 @@ import {
   ErrorEnvelopeSchema,
   LoginRequestSchema,
   MetricsSummaryResponseSchema,
+  OAuthDecisionRequestSchema,
+  OAuthDecisionResponseSchema,
+  OAuthRequestInfoSchema,
   PermissionListResponseSchema,
   PermissionResponseSchema,
   ROUTES,
@@ -263,6 +267,25 @@ export const api = {
   listAudit: async (query: Partial<AuditQuery>) =>
     request(`${ROUTES.listAudit.path}?${auditQueryString(query)}`, {
       schema: AuditListResponseSchema,
+    }),
+
+  // OAuth consent and connected apps (ADR 013).
+  getOAuthRequest: async (id: string) =>
+    request(routePath(ROUTES.getOAuthRequest.path, { id }), { schema: OAuthRequestInfoSchema }),
+  decideOAuthRequest: async (id: string, body: { approve: boolean; consentToken: string }) =>
+    request(routePath(ROUTES.decideOAuthRequest.path, { id }), {
+      method: 'POST',
+      body: checked(OAuthDecisionRequestSchema, body),
+      schema: OAuthDecisionResponseSchema,
+    }).then((r) => r.redirectTo),
+  listConnectedApps: async () =>
+    request(ROUTES.listConnectedApps.path, { schema: ConnectedAppListResponseSchema }).then(
+      (r) => r.apps,
+    ),
+  revokeConnectedApp: async (id: string) =>
+    request(routePath(ROUTES.revokeConnectedApp.path, { id }), {
+      method: 'DELETE',
+      schema: undefined,
     }),
 
   chat: async (body: ChatRequest) =>

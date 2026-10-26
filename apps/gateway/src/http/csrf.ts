@@ -9,12 +9,23 @@
 // patterns that authenticate with a bearer key instead of the cookie, compared against the route
 // the router matched (req.routeOptions.url), never the raw URL: the router decodes %xx, so a raw
 // prefix check could be sidestepped with /%61pi/... . Runs in onRequest, before body parsing.
+import { OAUTH_PATHS } from '@urumi/contracts';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { forbidden } from './errors.js';
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-/** Bearer-key routes (no cookie, so no CSRF): the external MCP endpoint (src/mcp/endpoint.ts). */
-const EXEMPT_ROUTES = new Set(['/mcp']);
+/**
+ * Routes that never read the session cookie, so CSRF does not apply: the external MCP endpoint
+ * (bearer credential, src/mcp/endpoint.ts) and the OAuth endpoints that authenticate the client,
+ * not the user (src/oauth/routes.ts; browser-based MCP clients call them cross-origin). The
+ * consent decision is NOT exempt: it is a cookie route under /api.
+ */
+const EXEMPT_ROUTES = new Set<string>([
+  '/mcp',
+  OAUTH_PATHS.register,
+  OAUTH_PATHS.token,
+  OAUTH_PATHS.revoke,
+]);
 
 function hasBody(req: FastifyRequest): boolean {
   const length = req.headers['content-length'];

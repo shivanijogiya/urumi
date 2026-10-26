@@ -5,5 +5,6 @@ export * from './errors.js';
 export * from './failures.js';
 export * from './mcp.js';
 export * from './naming.js';
+export * from './oauth.js';
 export * from './permissions.js';
 export type * from './rows.js';
