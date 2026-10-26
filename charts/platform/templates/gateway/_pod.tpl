@@ -108,7 +108,7 @@ spec:
         - name: CHAT_MODEL
           value: {{ $v.chatModel | quote }}
         - name: CHAT_DISCOVERY_THRESHOLD
-          value: {{ $v.chatDiscoveryThreshold | default 40 | int | quote }}
+          value: {{ $v.chatDiscoveryThreshold | int | quote }}
         {{- if $.Values.wooMcp.enabled }}
         # The internal woo-mcp upstream (W3) and the header secret it requires.
         - name: WOO_MCP_URL
