@@ -9,6 +9,7 @@ import { ChangePassword } from './pages/ChangePassword.js';
 import { Chat } from './pages/Chat.js';
 import { Keys } from './pages/Keys.js';
 import { Login } from './pages/Login.js';
+import { Health } from './pages/Health.js';
 import { Members } from './pages/Members.js';
 import { Permissions } from './pages/Permissions.js';
 import { Tools } from './pages/Tools.js';
@@ -68,6 +69,14 @@ export function AppRoutes() {
             element={
               <RequireAdmin>
                 <Members />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="health"
+            element={
+              <RequireAdmin>
+                <Health />
               </RequireAdmin>
             }
           />
