@@ -6,6 +6,8 @@ import { HEALTH_LEASE, Lease } from './core/leader.js';
 import { migrate } from './db/migrate.js';
 import { createPool } from './db/pool.js';
 import { seedAdmin } from './db/seed.js';
+import { GatewayMetrics } from './metrics/metrics.js';
+import { startMetricsServer } from './metrics/server.js';
 import { buildApp, LOGGER_OPTIONS } from './server.js';
 
 const DB_WAIT_MS = 120_000;
@@ -25,6 +27,7 @@ async function main(): Promise<void> {
 
   // The pool only logs after startup, by which time `server` exists.
   const pool = createPool(config.db, { error: (obj, msg) => server.log.error(obj, msg) });
+  const metrics = new GatewayMetrics({ pool });
   const server = buildApp({
     pool,
     logger: LOGGER_OPTIONS,
@@ -40,6 +43,7 @@ async function main(): Promise<void> {
     track: config.track,
     faultInject: config.faultInject,
     mcpRateLimits: config.mcpRateLimits,
+    metrics,
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
   if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {
@@ -54,9 +58,11 @@ async function main(): Promise<void> {
     lease: new Lease(pool, HEALTH_LEASE, config.podName),
   });
 
+  let metricsServer: Awaited<ReturnType<typeof startMetricsServer>> | undefined;
   const shutdown = async (signal: string) => {
     server.log.info({ signal }, 'shutting down');
     await health.stop().catch(() => undefined);
+    await metricsServer?.close().catch(() => undefined);
     await server.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
     process.exit(0);
@@ -68,6 +74,13 @@ async function main(): Promise<void> {
   await migrate(pool, config.migrationsDir, server.log);
   await seedAdmin(pool, config.seedAdmin, server.log);
   await server.listen({ host: '0.0.0.0', port: config.port });
+  if (config.metricsPort > 0) {
+    metricsServer = await startMetricsServer(metrics, {
+      port: config.metricsPort,
+      log: server.log,
+    });
+    server.log.info({ port: config.metricsPort }, 'metrics listening (internal)');
+  }
   health.start();
 }
 

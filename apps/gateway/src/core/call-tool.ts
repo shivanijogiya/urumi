@@ -8,7 +8,14 @@
 //
 // Client-facing messages name at most the slug (validated `[a-z0-9-]`): never a URL, address,
 // credential or raw upstream text. Details go to the server log as fixed-vocabulary strings.
-import { MCP_TIMEOUTS, parseQualifiedName, type ErrorCode, type Outcome } from '@urumi/contracts';
+import {
+  describeFailure,
+  FAILURE_DETAILS,
+  MCP_TIMEOUTS,
+  parseQualifiedName,
+  type ErrorCode,
+  type Outcome,
+} from '@urumi/contracts';
 import type { UpstreamRow } from '@urumi/contracts/db';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { FastifyBaseLogger } from 'fastify';
@@ -57,6 +64,41 @@ export interface CallRecord {
   outcome: Outcome;
   /** Null only for 'ok'; an isError result is UPSTREAM_ERROR (returned to the caller as is). */
   errorCode: ErrorCode | null;
+  /**
+   * Why it failed, fixed vocabulary (ADR 011): an UpstreamError detail ('Timed out', 'HTTP 503',
+   * 'Connection failed (ECONNREFUSED)' …) or one of FAILURE_DETAILS. Null for 'ok'.
+   */
+  errorDetail: string | null;
+  /**
+   * True once the name resolved to a real upstream tool: serverSlug/tool are then registry data,
+   * not caller input (metrics label only resolved names, to bound label cardinality).
+   */
+  resolved: boolean;
+}
+
+/** A GatewayError that also carries the fixed-vocabulary failure detail for audit and metrics. */
+export class DetailedGatewayError extends GatewayError {
+  constructor(
+    code: ErrorCode,
+    message: string,
+    readonly detail: string,
+  ) {
+    super(code, message);
+  }
+}
+
+const DETAIL_BY_CODE: Partial<Record<ErrorCode, string>> = {
+  FORBIDDEN: FAILURE_DETAILS.notPermitted,
+  TOOL_NOT_FOUND: FAILURE_DETAILS.unknownTool,
+  UPSTREAM_DISABLED: FAILURE_DETAILS.serverDisabled,
+  VALIDATION_FAILED: FAILURE_DETAILS.invalidArguments,
+  UPSTREAM_UNREACHABLE: FAILURE_DETAILS.serverDown,
+};
+
+/** The audit detail of a failed call. */
+export function detailFor(err: unknown, code: ErrorCode): string | null {
+  if (err instanceof DetailedGatewayError) return err.detail;
+  return DETAIL_BY_CODE[code] ?? null;
 }
 
 /** serverSlug of a call whose name does not parse as `{slug}__{tool}`. */
@@ -100,8 +142,15 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 export function createCallTool(deps: CallToolDeps): CallTool {
   const callTimeoutMs = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const notFound = () => new GatewayError('TOOL_NOT_FOUND', 'Tool not found');
-  const unreachable = (slug: string) =>
-    new GatewayError('UPSTREAM_UNREACHABLE', `Server '${slug}' is unreachable`);
+  /** `detail` is fixed vocabulary, so its label is safe to show the caller. */
+  const unreachable = (slug: string, detail?: string) => {
+    const why = describeFailure(detail);
+    return new DetailedGatewayError(
+      'UPSTREAM_UNREACHABLE',
+      `Server '${slug}' is unreachable${why ? `: ${why}` : ''}`,
+      detail ?? FAILURE_DETAILS.serverDown,
+    );
+  };
 
   async function resolve(
     qualifiedName: string,
@@ -112,7 +161,15 @@ export function createCallTool(deps: CallToolDeps): CallTool {
     if (!row) throw notFound();
     if (!row.enabled)
       throw new GatewayError('UPSTREAM_DISABLED', `Server '${row.slug}' is disabled`);
-    if (!isListable(row)) throw unreachable(row.slug);
+    if (!isListable(row)) {
+      // Marked down by the health loop: say why it is down (its last check's fixed detail).
+      const why = describeFailure(row.last_error);
+      throw new DetailedGatewayError(
+        'UPSTREAM_UNREACHABLE',
+        `Server '${row.slug}' is unreachable (marked down by the health check${why ? `: ${why}` : ''})`,
+        FAILURE_DETAILS.serverDown,
+      );
+    }
     const find = async (maxAgeMs?: number) => {
       try {
         return (await deps.registry.toolsFor(row, maxAgeMs)).find((t) => t.name === qualifiedName);
@@ -121,7 +178,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
           { upstream: row.slug, reason: (err as Error).message },
           'tool list unavailable for call',
         );
-        throw unreachable(row.slug);
+        throw unreachable(row.slug, err instanceof UpstreamError ? err.detail : undefined);
       }
     };
     const tool = (await find()) ?? (await find(UNKNOWN_TOOL_REFRESH_MS));
@@ -131,13 +188,19 @@ export function createCallTool(deps: CallToolDeps): CallTool {
 
   function toGatewayError(err: UpstreamError, slug: string): GatewayError {
     if (err.kind === 'timeout') {
-      return new GatewayError(
+      return new DetailedGatewayError(
         'UPSTREAM_TIMEOUT',
         `Server '${slug}' did not respond within ${callTimeoutMs / 1000} s`,
+        err.detail,
       );
     }
-    if (err.kind === 'unreachable') return unreachable(slug);
-    return new GatewayError('UPSTREAM_ERROR', `Server '${slug}' returned an error`);
+    if (err.kind === 'unreachable') return unreachable(slug, err.detail);
+    const why = describeFailure(err.detail);
+    return new DetailedGatewayError(
+      'UPSTREAM_ERROR',
+      `Server '${slug}' returned an error${why ? `: ${why}` : ''}`,
+      err.detail,
+    );
   }
 
   return async function callTool(userId, qualifiedName, args, opts) {
@@ -153,6 +216,8 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       durationMs: 0,
       outcome: 'error',
       errorCode: null,
+      errorDetail: null,
+      resolved: false,
     };
     try {
       if (typeof qualifiedName !== 'string' || qualifiedName.length > MAX_NAME_LEN) {
@@ -174,12 +239,17 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       }
       const { row, tool } = await resolve(qualifiedName);
       record.tool = tool.originalName.slice(0, MAX_NAME_LEN);
+      record.resolved = true;
       const tooLarge = (bytes: number | null) => {
         deps.log.warn(
           { upstream: row.slug, tool: tool.name, bytes, max: MAX_RESULT_BYTES },
           'tool result too large',
         );
-        return new GatewayError('UPSTREAM_ERROR', 'Tool result too large');
+        return new DetailedGatewayError(
+          'UPSTREAM_ERROR',
+          'Tool result too large',
+          FAILURE_DETAILS.resultTooLarge,
+        );
       };
       let result: CallToolResult;
       try {
@@ -199,6 +269,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
       if (result.isError) {
         record.outcome = 'error';
         record.errorCode = 'UPSTREAM_ERROR';
+        record.errorDetail = FAILURE_DETAILS.toolError;
       } else {
         record.outcome = 'ok';
       }
@@ -206,6 +277,7 @@ export function createCallTool(deps: CallToolDeps): CallTool {
     } catch (err) {
       record.errorCode = err instanceof HttpError ? err.code : 'INTERNAL';
       record.outcome = outcomeFor(record.errorCode);
+      record.errorDetail = detailFor(err, record.errorCode);
       throw err;
     } finally {
       record.durationMs = Date.now() - startedAt.getTime();

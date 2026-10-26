@@ -288,6 +288,8 @@ describe('GET /api/audit', () => {
       durationMs: 12,
       outcome: 'ok',
       errorCode: null,
+      errorDetail: null,
+      resolved: true,
       ...extra,
     };
   }

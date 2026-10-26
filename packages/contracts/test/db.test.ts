@@ -41,3 +41,13 @@ describe('003_scaling.sql', () => {
     );
   });
 });
+
+describe('004_observability.sql', () => {
+  const obs = readFileSync(join(MIGRATIONS_DIR, '004_observability.sql'), 'utf8');
+  it('adds last_ok_at, a bounded error_detail and the per-server audit index (additive only)', () => {
+    expect(obs).toContain('ALTER TABLE upstreams ADD COLUMN last_ok_at timestamptz');
+    expect(obs).toContain('ALTER TABLE audit_log ADD COLUMN error_detail text');
+    expect(obs).toMatch(/ON audit_log \(server_slug, started_at DESC\)/);
+    expect(obs).not.toMatch(/\bDROP\b/);
+  });
+});

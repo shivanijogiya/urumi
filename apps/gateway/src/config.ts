@@ -117,6 +117,12 @@ const EnvSchema = z.object({
   MCP_RATE_LIMIT_KEY_BURST: count(60),
   MCP_RATE_LIMIT_USER_PER_MIN: count(240),
   MCP_RATE_LIMIT_USER_BURST: count(120),
+  // Internal Prometheus listener (ADR 011): GET /metrics only, never routed by the Ingress.
+  // 0 turns it off.
+  METRICS_PORT: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(65535).default(9464),
+  ),
   // This replica's name for the health-loop lease (Kubernetes: the pod name). Default: hostname.
   POD_NAME: z.preprocess(
     (v) => (v === '' ? undefined : v),
@@ -166,6 +172,8 @@ export interface Config {
   };
   /** Holder name for the health lease. */
   podName: string;
+  /** Internal /metrics port; 0 = off. */
+  metricsPort: number;
 }
 
 export class ConfigError extends Error {
@@ -217,6 +225,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       perUser: { perMinute: e.MCP_RATE_LIMIT_USER_PER_MIN, burst: e.MCP_RATE_LIMIT_USER_BURST },
     },
     podName: e.POD_NAME ?? hostname(),
+    metricsPort: e.METRICS_PORT,
   };
 }
 
