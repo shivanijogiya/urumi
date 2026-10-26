@@ -205,6 +205,8 @@ until it is turned back on.
   network; a cached image/volume would remove the internet dependency); https storefronts need a
   TLS Secret per namespace (not managed); local-path volumes are node-bound; no per-store admin login
   to the dashboard (store admins use wp-admin with the generated password, which only a cluster admin
-  can read from the `store-admin` Secret); the quota is sized for an 8 GB laptop.
+  can read from the `store-admin` Secret); the quota is sized for an 8 GB laptop; on a store's first start
+  WordPress restarts once (the official image's `tar` cannot chmod the root of a fresh local-path
+  volume as uid 33 — the built-in store has the same behaviour; the second start is clean).
 - **Cost:** one store ≈ 300–450 MiB of RAM at rest (MariaDB, WordPress, woo-mcp) plus ~200 MiB
   during the bootstrap Job.
