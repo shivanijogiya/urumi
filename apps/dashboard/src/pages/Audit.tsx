@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { OutcomeSchema, type AuditQuery } from '@urumi/contracts';
+import { describeFailure, OutcomeSchema, type AuditQuery } from '@urumi/contracts';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api.js';
 import { useCurrentUser } from '../auth.js';
@@ -147,7 +147,12 @@ export function Audit() {
                     <Badge value={a.outcome} />
                   </td>
                   <td>{a.durationMs} ms</td>
-                  <td>{a.errorCode ?? ''}</td>
+                  <td>
+                    {a.errorCode ?? ''}
+                    {a.errorDetail && (
+                      <div className="muted">{describeFailure(a.errorDetail) ?? a.errorDetail}</div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -214,6 +214,7 @@ describe('no arguments or results stored', () => {
       'api_key_id',
       'duration_ms',
       'error_code',
+      'error_detail', // fixed vocabulary (ADR 011), never upstream text or arguments
       'id',
       'outcome',
       'server_slug',
@@ -288,6 +289,8 @@ describe('GET /api/audit', () => {
       durationMs: 12,
       outcome: 'ok',
       errorCode: null,
+      errorDetail: null,
+      resolved: true,
       ...extra,
     };
   }
@@ -344,6 +347,8 @@ describe('GET /api/audit', () => {
       durationMs: 12,
       outcome: 'ok',
       errorCode: null,
+      errorDetail: null,
+      errorReason: null,
     });
   });
 

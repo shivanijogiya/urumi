@@ -19,7 +19,13 @@ import {
   type CallToolResult,
   type Tool as McpTool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { httpStatusFor, makeError, MCP_PATH, type ErrorCode } from '@urumi/contracts';
+import {
+  FAILURE_DETAILS,
+  httpStatusFor,
+  makeError,
+  MCP_PATH,
+  type ErrorCode,
+} from '@urumi/contracts';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateApiKey } from '../auth/api-keys.js';
 import type { CallRecord, CallTool } from '../core/call-tool.js';
@@ -148,6 +154,11 @@ export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps)
       durationMs: Date.now() - startedAt.getTime(),
       outcome: 'rate_limited',
       errorCode: 'RATE_LIMITED',
+      errorDetail:
+        decision.scope === 'user'
+          ? FAILURE_DETAILS.rateLimitedUser
+          : FAILURE_DETAILS.rateLimitedKey,
+      resolved: false,
     });
     const scope = decision.scope === 'user' ? 'this user' : 'this API key';
     return reply

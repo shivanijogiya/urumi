@@ -528,3 +528,19 @@ tr.revoked td {
 .tool-access li {
   margin: 0.15rem 0;
 }
+
+/* ── Health / Metrics ──────────────────────────────────────────────────── */
+.health-table td {
+  vertical-align: top;
+}
+
+ul.plain {
+  margin: 0;
+  padding-left: 1em;
+}
+
+.badge-disabled,
+.badge-unknown {
+  background: #eceff3;
+  color: var(--muted);
+}

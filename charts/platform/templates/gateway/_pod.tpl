@@ -55,6 +55,10 @@ spec:
       ports:
         - name: http
           containerPort: 8080
+        {{- if $v.metrics.enabled }}
+        - name: metrics
+          containerPort: {{ $v.metrics.port }}
+        {{- end }}
       env:
         - name: PORT
           value: "8080"
@@ -113,6 +117,9 @@ spec:
               name: {{ $.Values.secretName }}
               key: {{ $.Values.wooMcp.secretKeys.sharedSecret }}
         {{- end }}
+        # Internal Prometheus listener (ADR 011); 0 = off.
+        - name: METRICS_PORT
+          value: {{ ternary $v.metrics.port 0 (and $v.metrics.enabled true) | quote }}
         # Several replicas (ADR 010): the pod name holds the health-loop lease; /mcp rate limits.
         - name: POD_NAME
           valueFrom:

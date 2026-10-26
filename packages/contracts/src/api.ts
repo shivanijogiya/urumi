@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ErrorCodeSchema } from './errors.js';
+import { FailureReasonSchema } from './failures.js';
 import { SLUG_RE } from './naming.js';
 
 // Request schemas are strict (unknown fields → VALIDATION_FAILED); timestamps are ISO-8601 UTC strings.
@@ -38,6 +39,7 @@ export const ROUTES = {
   listPermissions: { method: 'GET', path: '/api/permissions', auth: 'admin' },
   upsertPermission: { method: 'POST', path: '/api/permissions', auth: 'admin' },
   deletePermission: { method: 'DELETE', path: '/api/permissions/:id', auth: 'admin' },
+  metricsSummary: { method: 'GET', path: '/api/metrics/summary', auth: 'admin' },
   chat: { method: 'POST', path: '/api/chat', auth: 'session' },
 } as const satisfies Record<string, Route>;
 
@@ -139,6 +141,10 @@ export const UpstreamSchema = z.strictObject({
   status: z.enum(['unknown', 'up', 'down']),
   lastError: z.string().nullable(),
   lastCheckedAt: timestamp.nullable(),
+  /** Classification of lastError (ADR 011); null when there is none. */
+  lastErrorReason: FailureReasonSchema.nullable(),
+  /** Last successful health check. */
+  lastOkAt: timestamp.nullable(),
   toolCount: z.number().int().nonnegative(),
 });
 export const UpstreamResponseSchema = z.object({ upstream: UpstreamSchema });
@@ -182,10 +188,66 @@ export const AuditEntrySchema = z.object({
   durationMs: z.number().int().nonnegative(),
   outcome: OutcomeSchema,
   errorCode: ErrorCodeSchema.nullable(),
+  /** Why the call failed, fixed vocabulary (ADR 011); null for ok. */
+  errorDetail: z.string().nullable(),
+  errorReason: FailureReasonSchema.nullable(),
 });
 export const AuditListResponseSchema = z.object({
   items: z.array(AuditEntrySchema),
   nextCursor: z.string().nullable(),
+});
+
+// ── Metrics (ADR 011) ────────────────────────────────────────────────────────────────────────
+/** GET /api/metrics/summary: per-server call stats over a window, from audit_log (all replicas). */
+export const MetricsSummaryQuerySchema = z.strictObject({
+  windowMinutes: z.coerce.number().int().min(1).max(10_080).default(60),
+});
+export const ServerMetricsSchema = z.object({
+  serverSlug: z.string(),
+  calls: z.number().int().nonnegative(),
+  /** Calls whose outcome is not `ok`. */
+  errors: z.number().int().nonnegative(),
+  /** errors / calls, 0..1 (0 when there are no calls). */
+  errorRate: z.number().min(0).max(1),
+  p50Ms: z.number().nonnegative().nullable(),
+  p95Ms: z.number().nonnegative().nullable(),
+  byOutcome: z.record(z.string(), z.number().int().nonnegative()),
+  /** Most frequent failure details in the window. */
+  topErrors: z.array(
+    z.object({
+      errorCode: z.string().nullable(),
+      errorDetail: z.string().nullable(),
+      reason: FailureReasonSchema.nullable(),
+      count: z.number().int().positive(),
+      lastAt: timestamp,
+    }),
+  ),
+  /** The registered upstream with this slug, if any (calls can name unknown slugs). */
+  upstream: z
+    .object({
+      id,
+      name: z.string(),
+      enabled: z.boolean(),
+      status: z.enum(['unknown', 'up', 'down']),
+      lastError: z.string().nullable(),
+      lastErrorReason: FailureReasonSchema.nullable(),
+      lastCheckedAt: timestamp.nullable(),
+      lastOkAt: timestamp.nullable(),
+    })
+    .nullable(),
+});
+export const MetricsSummaryResponseSchema = z.object({
+  windowMinutes: z.number().int(),
+  generatedAt: timestamp,
+  /** Replica (pod) currently holding the health-loop lease; null if none (ADR 010). */
+  healthLeader: z.string().nullable(),
+  totals: z.object({
+    calls: z.number().int().nonnegative(),
+    errors: z.number().int().nonnegative(),
+    errorRate: z.number().min(0).max(1),
+    rateLimited: z.number().int().nonnegative(),
+  }),
+  servers: z.array(ServerMetricsSchema),
 });
 
 // ── Chat ─────────────────────────────────────────────────────────────────────────────────────
@@ -229,6 +291,9 @@ export type Tool = z.infer<typeof ToolSchema>;
 export type Outcome = z.infer<typeof OutcomeSchema>;
 export type AuditQuery = z.infer<typeof AuditQuerySchema>;
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+export type MetricsSummaryQuery = z.infer<typeof MetricsSummaryQuerySchema>;
+export type ServerMetrics = z.infer<typeof ServerMetricsSchema>;
+export type MetricsSummaryResponse = z.infer<typeof MetricsSummaryResponseSchema>;
 export type AuditListResponse = z.infer<typeof AuditListResponseSchema>;
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;

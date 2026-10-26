@@ -15,6 +15,7 @@ import {
   CreateUserResponseSchema,
   ErrorEnvelopeSchema,
   LoginRequestSchema,
+  MetricsSummaryResponseSchema,
   PermissionListResponseSchema,
   PermissionResponseSchema,
   ROUTES,
@@ -253,6 +254,11 @@ export const api = {
     }).then((r) => r.tools),
   listTools: async () =>
     request(ROUTES.listTools.path, { schema: ToolListResponseSchema }).then((r) => r.tools),
+
+  metricsSummary: async (windowMinutes: number) =>
+    request(`${ROUTES.metricsSummary.path}?windowMinutes=${encodeURIComponent(windowMinutes)}`, {
+      schema: MetricsSummaryResponseSchema,
+    }),
 
   listAudit: async (query: Partial<AuditQuery>) =>
     request(`${ROUTES.listAudit.path}?${auditQueryString(query)}`, {

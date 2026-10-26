@@ -17,6 +17,8 @@ import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
 import { registerKeyRoutes } from './keys/routes.js';
 import { registerMcpEndpoint } from './mcp/endpoint.js';
+import type { GatewayMetrics } from './metrics/metrics.js';
+import { registerMetricsRoutes } from './metrics/summary.js';
 import { registerPermissionRoutes } from './permissions/routes.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
 import { PgTokenBucket, type McpRateLimits } from './ratelimit/bucket.js';
@@ -75,6 +77,8 @@ export interface AppDeps {
   faultInject?: { errorRate: number; latencyMs: number };
   /** /mcp per-key and per-user token buckets in Postgres (ADR 010). Default: no limit. */
   mcpRateLimits?: McpRateLimits;
+  /** Prometheus metrics (ADR 011); main.ts serves them on the internal port. Default: none. */
+  metrics?: GatewayMetrics;
 }
 
 /**
@@ -182,6 +186,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     log: app.log,
     ...(deps.mcpTimeouts?.callMs ? { callTimeoutMs: deps.mcpTimeouts.callMs } : {}),
     onCallFinished: async (record) => {
+      deps.metrics?.observeCall(record);
       await writeAudit(record);
       await deps.onCallFinished?.(record);
     },
@@ -202,7 +207,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       ? { bucket: new PgTokenBucket(deps.pool), limits: deps.mcpRateLimits }
       : undefined,
     audit: writeAudit,
+    onRateLimited: deps.metrics ? (scope) => deps.metrics!.observeRateLimited(scope) : undefined,
   });
+  registerMetricsRoutes(app);
   const anthropic = deps.chat?.anthropic;
   registerChatRoutes(app, {
     service: anthropic

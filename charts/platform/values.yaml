@@ -245,6 +245,22 @@ gateway:
   # Seconds a terminating pod keeps serving before SIGTERM, so the Ingress drops it from its
   # endpoints first and no request is sent to a closed socket during a rollout or pod kill.
   preStopSleepSeconds: 5
+  # Prometheus metrics (ADR 011): GET /metrics on this container port of every gateway pod. It is
+  # NOT on the gateway Service the Ingress uses; a separate ClusterIP Service `<release>-gateway-
+  # metrics` exposes it, and NetworkPolicy admits only pods labelled `scraperLabel` in this
+  # namespace (and, if set, pods in `scraperNamespace`). Metrics are per pod: sum over pods.
+  metrics:
+    enabled: true
+    port: 9464
+    # Label a scraper pod (Prometheus, an e2e check) needs to reach the port.
+    scraperLabel:
+      urumi.io/metrics-scraper: 'true'
+    # Namespace of an external Prometheus (e.g. monitoring); empty = none.
+    scraperNamespace: ''
+    # prometheus-operator ServiceMonitor. Off: no operator is installed by this chart.
+    serviceMonitor:
+      enabled: false
+      interval: 30s
   # /mcp rate limits (ADR 010): token buckets per API key and per user, in Postgres, so the limit
   # holds across replicas. perMinute = sustained rate, burst = bucket size. 0 turns a limit off.
   # Refused requests get 429 + Retry-After and an audit row with outcome `rate_limited`.

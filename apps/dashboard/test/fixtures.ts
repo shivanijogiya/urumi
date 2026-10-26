@@ -48,6 +48,8 @@ export function upstream(overrides: Partial<Upstream> = {}): Upstream {
     status: 'up',
     lastError: null,
     lastCheckedAt: T,
+    lastErrorReason: null,
+    lastOkAt: T,
     toolCount: 2,
     ...overrides,
   });
@@ -89,6 +91,8 @@ export function auditEntry(id: string, overrides: Partial<AuditEntry> = {}): Aud
     durationMs: 120,
     outcome: 'ok',
     errorCode: null,
+    errorDetail: null,
+    errorReason: null,
     ...overrides,
   });
 }

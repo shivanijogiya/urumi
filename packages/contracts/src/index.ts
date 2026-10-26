@@ -2,6 +2,7 @@
 // Node-only helpers (MIGRATIONS_DIR) live at `@urumi/contracts/db`.
 export * from './api.js';
 export * from './errors.js';
+export * from './failures.js';
 export * from './mcp.js';
 export * from './naming.js';
 export * from './permissions.js';

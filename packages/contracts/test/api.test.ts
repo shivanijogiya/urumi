@@ -100,6 +100,8 @@ describe('upstreams', () => {
       status: 'up',
       lastError: null,
       lastCheckedAt: now,
+      lastErrorReason: null,
+      lastOkAt: now,
       toolCount: 5,
     };
     expect(ok(UpstreamSchema, upstream)).toBe(true);

@@ -42,6 +42,8 @@ export interface UpstreamRow {
   status: 'unknown' | 'up' | 'down';
   last_error: string | null;
   last_checked_at: Date | null;
+  /** Last successful health check (004_observability.sql). */
+  last_ok_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -57,4 +59,6 @@ export interface AuditLogRow {
   duration_ms: number;
   outcome: 'ok' | 'error' | 'timeout' | 'denied' | 'rate_limited';
   error_code: string | null;
+  /** Fixed-vocabulary failure detail (004_observability.sql); null for ok. */
+  error_detail: string | null;
 }

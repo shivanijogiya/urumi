@@ -1,6 +1,6 @@
 // SQL for upstreams. Parameterized queries only. Credential ciphertext stays in this module and
 // decrypt-for-call.ts; API objects are built by toUpstream and checked against the strict schema.
-import { UpstreamSchema, type Upstream } from '@urumi/contracts';
+import { classifyFailure, UpstreamSchema, type Upstream } from '@urumi/contracts';
 import type { UpstreamRow } from '@urumi/contracts/db';
 import type pg from 'pg';
 import type { Sealed } from '../crypto/secretbox.js';
@@ -12,7 +12,7 @@ export type StoredCredential = Sealed & { type: 'bearer' | 'header'; headerName:
 
 const COLUMNS = `id, slug, name, url, enabled, credential_type, credential_header_name,
   credential_ciphertext, credential_iv, credential_tag, status, last_error, last_checked_at,
-  created_at, updated_at`;
+  last_ok_at, created_at, updated_at`;
 
 /**
  * The API view of a row. Parsed with the strict UpstreamSchema, so an unexpected field (a
@@ -33,6 +33,8 @@ export function toUpstream(
     status: row.status,
     lastError: row.last_error,
     lastCheckedAt: row.last_checked_at?.toISOString() ?? null,
+    lastErrorReason: classifyFailure(row.last_error),
+    lastOkAt: row.last_ok_at?.toISOString() ?? null,
     toolCount: opts.toolCount ?? 0, // from the tool registry cache
   });
 }
@@ -54,7 +56,8 @@ export async function setUpstreamHealth(
   result: { status: 'up' | 'down'; lastError: string | null },
 ): Promise<boolean> {
   const { rowCount } = await db.query(
-    `UPDATE upstreams SET status = $4, last_error = $5, last_checked_at = now()
+    `UPDATE upstreams SET status = $4, last_error = $5, last_checked_at = now(),
+       last_ok_at = CASE WHEN $4 = 'up' THEN now() ELSE last_ok_at END
      WHERE id = $1 AND url = $2 AND credential_iv IS NOT DISTINCT FROM $3::bytea AND enabled`,
     [checked.id, checked.url, checked.credential_iv, result.status, result.lastError],
   );

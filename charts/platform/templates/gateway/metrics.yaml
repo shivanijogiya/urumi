@@ -1,0 +1,39 @@
+{{- if and .Values.gateway.enabled .Values.gateway.metrics.enabled }}
+{{- $ctx := dict "ctx" $ "component" "gateway" }}
+{{- $m := .Values.gateway.metrics }}
+# Prometheus scrape target (ADR 011): the gateway pods' internal metrics port. Not referenced by
+# any Ingress; NetworkPolicy <release>-gateway-metrics admits only labelled scraper pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.componentName" $ctx }}-metrics
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+    urumi.io/metrics: 'true'
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ $m.port }}
+      targetPort: metrics
+{{- if $m.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+      urumi.io/metrics: 'true'
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $m.serviceMonitor.interval }}
+{{- end }}
+{{- end }}
