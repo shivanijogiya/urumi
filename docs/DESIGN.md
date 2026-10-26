@@ -328,7 +328,7 @@ and `values-prod.yaml` (README "Local → VPS").
 | `urumi-postgres`   | StatefulSet, PVC                            | liveness + readiness                                                    | NetworkPolicy: gateway pods only, TCP 5432                                                             |
 | `urumi-woo-mcp`    | Deployment                                  | `/healthz`                                                              | 0 replicas until `urumi-woo-api` exists (`lookup`); NetworkPolicy: gateway pods only, 8080; no Ingress |
 | `urumi-everything` | Deployment                                  | TCP                                                                     | NetworkPolicy: gateway pods only, 3001; no Ingress; read-only root FS                                  |
-| `urumi-gateway`    | Deployment                                  | startup + liveness `/healthz`, readiness `/readyz` (DB `SELECT 1`, 1 s) | Ingress `app.<host>` `/api`, `/mcp`                                                                    |
+| `urumi-gateway`    | Deployment, 2 replicas (local/prod), PDB    | startup + liveness `/healthz`, readiness `/readyz` (DB `SELECT 1`, 1 s) | Ingress `app.<host>` `/api`, `/mcp`; soft anti-affinity; `preStop` drain (ADR 010)                     |
 | `urumi-dashboard`  | Deployment                                  | liveness + readiness                                                    | Ingress `app.<host>` `/`                                                                               |
 
 - **Requests and limits** on every container (`values.yaml`); `tests/infra/chart-checks.sh`
@@ -354,6 +354,12 @@ and `values-prod.yaml` (README "Local → VPS").
 - **Non-root**: every long-running container runs as a non-root uid. WordPress runs as www-data
   (33) with all capabilities dropped and binds port 80 through the safe pod sysctl
   `net.ipv4.ip_unprivileged_port_start=0` (`wordpress.runAsNonRoot`, ADR 009).
+- **Several gateway replicas** (ADR 010, `gateway.replicas`): any replica serves any request —
+  `/mcp` is stateless Streamable HTTP, and what replicas must agree on lives in Postgres: the `/mcp`
+  token buckets (`rate_limit_buckets`, per key and per user, one atomic UPSERT per bucket, 429 +
+  `Retry-After`, audited `rate_limited`) and the `health` lease (`gateway_leases`): only the
+  holder runs the 15 s health loop and writes upstream status; followers read status from the
+  row. Tool caches stay per replica (correctness comes from the row). D10 proves it on k3d.
 - **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
   in-cluster upstreams pass the private-address check.
 
@@ -363,14 +369,15 @@ and `values-prod.yaml` (README "Local → VPS").
 | ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Stateless `/mcp`, no sessions         | Key re-checked on every request; no sticky routing    | No `tools/list_changed` push; clients re-list to see D6                                  |
 | New upstream connection per operation | Simple, no shared state, isolation per call           | Extra `initialize` round trip per call; sessions are closed without `DELETE` (see below) |
-| In-memory caches and rate limits      | No Redis                                              | Per replica, reset on restart; one gateway replica is assumed                            |
+| Shared state in Postgres, not Redis   | No new stateful dependency; replicas agree (ADR 010)  | Two small UPSERTs per `/mcp` POST; chat limit and login throttle still per replica       |
 | Per-tool permissions read per request | A rule change applies on the next call; one code path | One small policy query per `tools/list` / `tools/call` (ADR 008); no per-API-key scopes  |
 | Request/response chat                 | Simple, stateless                                     | No streaming; long tool loops show nothing until done                                    |
 | Metadata-only audit                   | No second store of customer data                      | Cannot replay what a tool was asked; admin actions are not audited                       |
 | Static bearer for GitLab              | No OAuth flow in the gateway                          | Token expiry is manual rotation (update Secret, re-run seed)                             |
 
 With more time: terminate upstream MCP sessions (`DELETE`) after each operation; stream-cap
-response bodies before parsing; audit admin actions; per-key rate limits on `/mcp`;
+response bodies before parsing; audit admin actions; move the chat limit and login throttle to
+the shared token buckets;
 append-only audit role in Postgres; per-API-key scopes;
 confirmation step for write tools in chat; KMS-backed or rotatable `GATEWAY_ENC_KEY`; image
 build + e2e in CI; a real VPS run (#25).
