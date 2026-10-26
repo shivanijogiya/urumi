@@ -1,6 +1,6 @@
 # ADR 012 — Many tools: discovery mode (search, then execute)
 
-Status: proposed (needs Aadi: new meta-tools, reserved slug, chat behaviour changes above a
+Status: accepted, merged to `main` (was proposed: needs Aadi: new meta-tools, reserved slug, chat behaviour changes above a
 threshold) · Brief stand-out item 4 ("Many tools") · Builds on ADR 008 (permissions), 011
 
 ## Context

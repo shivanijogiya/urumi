@@ -1,16 +1,152 @@
 # Urumi MCP Gateway
 
-A WooCommerce store and a team MCP gateway, both on Kubernetes. An admin registers MCP servers
-once. Team members then use every enabled tool through one authenticated URL, from an MCP client
-(Claude Code, Cursor, MCP Inspector) or from the dashboard's chat agent. Every tool call is
-attributed to a user and audited. One Helm chart runs on local k3d and, with a different values
-file, on a VPS.
+Urumi is a team gateway for MCP tools, running next to a WooCommerce store on Kubernetes. An admin
+registers MCP servers once — our own WooCommerce MCP server, the MCP reference server, GitLab's
+hosted MCP server, container images the cluster runs for you, or extra stores created from the
+dashboard. Team members then use every tool they are permitted through **one authenticated URL**,
+from an MCP client (Claude Code, Cursor, MCP Inspector; API key or OAuth sign-in) or from the
+dashboard's chat agent. Every call is checked against per-tool permissions, rate limited, run with
+a timeout and written to an audit log under the user who made it. One Helm chart runs it on local
+k3d and, with a different values file, on a VPS. The project also ships a GitLab release pipeline
+that canaries every gateway release and heals a bad one with GitLab Duo agents.
 
 **New here? Start with [`docs/RUN_ON_YOUR_COMPUTER.md`](docs/RUN_ON_YOUR_COMPUTER.md)** — a
-plain-language, step-by-step guide to running it on your own laptop.
+plain-language, step-by-step guide to running it on your own laptop. All documents:
+[Docs index](#docs-index).
 
-Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Threat model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
-· Requirement IDs (K1…D8): [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) · ADRs: [`docs/adr/`](docs/adr/)
+<!-- SCREENSHOTS
+## Screenshots
+
+| Upstream servers                                        | Chat with tool calls                 |
+| ------------------------------------------------------- | ------------------------------------ |
+| ![Upstreams page](docs/images/dashboard-servers.png)    | ![Chat page](docs/images/chat.png)   |
+
+| Audit log                              | Tool permissions                                 |
+| -------------------------------------- | ------------------------------------------------ |
+| ![Audit page](docs/images/audit.png)   | ![Permissions page](docs/images/permissions.png) |
+
+| Health / metrics                         | Stores                                   |
+| ---------------------------------------- | ---------------------------------------- |
+| ![Health page](docs/images/health.png)   | ![Stores page](docs/images/stores.png)   |
+SCREENSHOTS -->
+
+## Architecture
+
+```mermaid
+flowchart LR
+  browser["Browser: dashboard + chat"]
+  client["External MCP client<br/>(API key or OAuth)"]
+  claude["Claude API"]
+  gitlab["GitLab MCP<br/>gitlab.com/api/v4/mcp"]
+
+  subgraph urumi["namespace urumi"]
+    traefik["Traefik Ingress"]
+    dash["dashboard<br/>(nginx, React)"]
+    gw["gateway x2 replicas<br/>/api, /mcp, /oauth, chat"]
+    pg[("Postgres")]
+    woo["woo-mcp"]
+    wp["WordPress + WooCommerce"]
+    maria[("MariaDB")]
+    every["server-everything"]
+  end
+
+  subgraph hosted["namespace urumi-hosted"]
+    hmcp["hosted MCP servers<br/>(admin-added images)"]
+  end
+
+  subgraph store["namespace store-slug (one per extra store)"]
+    swoo["woo-mcp"]
+    swp["WordPress + WooCommerce"]
+    smaria[("MariaDB")]
+  end
+
+  browser -- "app.localtest.me" --> traefik
+  browser -- "store.localtest.me" --> traefik
+  client -- "app.localtest.me/mcp" --> traefik
+  traefik --> dash
+  traefik -- "/api, /mcp, /oauth" --> gw
+  traefik --> wp
+  gw --> pg
+  gw -- "shared-secret header" --> woo
+  woo -- "REST API + Application Password" --> wp
+  wp --> maria
+  gw --> every
+  gw -- "encrypted bearer token" --> gitlab
+  gw --> hmcp
+  gw --> swoo
+  swoo --> swp
+  swp --> smaria
+  gw -- "chat" --> claude
+```
+
+| Component         | Source                            | Runs as                                        | Reachable from                                    |
+| ----------------- | --------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
+| gateway           | `apps/gateway`                    | Deployment `urumi-gateway`, 2 replicas + PDB   | Ingress `app.<host>/api`, `/mcp`, `/oauth`        |
+| dashboard         | `apps/dashboard`                  | Deployment `urumi-dashboard` (nginx)           | Ingress `app.<host>/`                             |
+| woo-mcp           | `apps/woo-mcp`                    | Deployment `urumi-woo-mcp`                     | gateway pods only (NetworkPolicy + shared secret) |
+| server-everything | `apps/everything/Dockerfile`      | Deployment `urumi-everything`                  | gateway pods only (NetworkPolicy)                 |
+| WordPress + Woo   | official `wordpress` image        | Deployment + PVC                               | Ingress `store.<host>`                            |
+| MariaDB           | official `mariadb` image          | StatefulSet + PVC                              | in-cluster                                        |
+| Postgres 16       | official `postgres` image         | StatefulSet + PVC                              | gateway pods only (NetworkPolicy)                 |
+| bootstrap         | `charts/platform/files/bootstrap` | Helm `post-install,post-upgrade` hook Job      | —                                                 |
+| GitLab MCP        | hosted by GitLab                  | external                                       | gateway, over the internet                        |
+| hosted servers    | `apps/gateway/src/hosted`         | Deployments in `urumi-hosted`, made by gateway | gateway pods only (ADR 014)                       |
+| extra stores      | `apps/gateway/src/stores`         | namespace `store-<slug>`, made by gateway      | Ingress `<slug>.store.<host>`; woo-mcp: gateway   |
+
+## One tool call, end to end
+
+The MCP endpoint and the chat agent both end in the same `callTool` function
+(`apps/gateway/src/core/call-tool.ts`), so every call gets the same checks and the same audit row.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as MCP client
+  participant G as gateway
+  participant P as Postgres
+  participant U as Upstream MCP server
+
+  C->>G: POST /mcp tools/call (Bearer API key or OAuth token)
+  G->>P: authenticate: sha256(token) to user (before the body is read)
+  alt unknown or revoked
+    G-->>C: 401
+  end
+  G->>P: rate limit: per-key and per-user token buckets
+  alt over the limit
+    G-->>C: 429 + Retry-After (audited rate_limited)
+  end
+  G->>P: permission check: is this tool allowed for this user?
+  alt not permitted
+    G-->>C: FORBIDDEN (audited denied)
+  end
+  G->>U: SSRF check, pinned connection, credential header, 15 s deadline
+  U-->>G: result (or error / timeout)
+  G->>P: INSERT audit_log: user, server, tool, duration, outcome
+  G-->>C: tool result
+```
+
+## Features
+
+| Area                   | What you get                                                                                                                        | IDs / ADR    |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Kubernetes             | One Helm chart for local k3d and a VPS; Ingress at stable URLs; probes and limits everywhere; data on PVCs; no secrets in git       | K1–K6        |
+| WooCommerce MCP server | Our own Streamable HTTP server: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`; internal-only | W1–W4        |
+| Gateway                | Admin-managed upstreams; one `/mcp` URL aggregating them as `{server}__{tool}`; slow/dead upstreams isolated; credentials encrypted | G1–G6        |
+| Team, keys, audit      | Admin and member roles; per-user API keys (hashed, revocable); every tool call audited                                              | T1–T3        |
+| Chat agent             | Claude tool loop in the dashboard, acting as the signed-in user, showing the tools it used                                          | C1–C3        |
+| Demo flows             | Scripted D1–D8 from the brief, plus D9–D15 for the extras: `tests/e2e/run.sh all`                                                   | D1–D8        |
+| Tool permissions       | Per-role and per-user allow/deny rules; members read-only by default                                                                | ADR 008, D9  |
+| Network isolation      | Default-deny NetworkPolicies (ingress + egress), non-root containers                                                                | ADR 009      |
+| Scaling                | 2 gateway replicas, shared Postgres rate limits, health-loop lease                                                                  | ADR 010, D10 |
+| Observability          | Prometheus `/metrics`, classified failure reasons, Health / Metrics page                                                            | ADR 011, D11 |
+| Many tools             | Discovery mode: search + call meta-tools                                                                                            | ADR 012, D12 |
+| OAuth 2.1              | MCP clients sign in through the browser (DCR, PKCE, rotating refresh tokens)                                                        | ADR 013, D13 |
+| Hosted MCP servers     | Add an MCP server by container image; the cluster runs it, hardened and isolated                                                    | ADR 014, D14 |
+| Multiple stores        | Create and delete WooCommerce stores from the dashboard, one namespace each                                                         | ADR 015, D15 |
+| Self-healing releases  | GitLab CI canary, automatic rollback, Duo incident / fix / postmortem flows                                                         | ADR 003–007  |
+
+Status per item, with what is missing: [Stand-out items attempted](#stand-out-items-attempted).
+Requirement-by-requirement evidence: [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md).
 
 ## GitLab Transcend hackathon: a release pipeline that heals itself
 
@@ -56,57 +192,9 @@ Details: [`docs/HACKATHON.md`](docs/HACKATHON.md) · ADRs [003 canary](docs/adr/
 [004 Duo flows](docs/adr/004-duo-flows.md), [005 self-healing](docs/adr/005-self-healing.md),
 [007 Duo dispatch](docs/adr/007-duo-dispatch.md).
 
-## The application being released
+## Quickstart
 
-## Architecture
-
-```mermaid
-flowchart LR
-  browser["Browser"]
-  client["External MCP client<br/>(Inspector, Claude Code)"]
-  subgraph k8s["Kubernetes namespace urumi"]
-    traefik["Traefik Ingress"]
-    dash["dashboard<br/>(nginx, React build)"]
-    gw["gateway<br/>/api/* · /mcp · chat loop<br/>callTool → audit_log"]
-    pg[("Postgres<br/>users, keys, upstreams, audit")]
-    woo["woo-mcp<br/>(ClusterIP only)"]
-    every["server-everything<br/>(ClusterIP only)"]
-    wp["WordPress + WooCommerce"]
-    db[("MariaDB")]
-    job["bootstrap Job<br/>(Helm hook)"]
-  end
-  gitlab["GitLab MCP<br/>gitlab.com/api/v4/mcp"]
-  claude["Claude API"]
-
-  browser -- "app.localtest.me /" --> traefik
-  browser -- "store.localtest.me" --> traefik
-  client -- "app.localtest.me/mcp + Bearer key" --> traefik
-  traefik --> dash
-  traefik -- "/api, /mcp" --> gw
-  traefik --> wp
-  gw --> pg
-  gw -- "x-woo-mcp-secret" --> woo
-  gw --> every
-  gw -- "Bearer PAT (encrypted at rest)" --> gitlab
-  gw -- "x-api-key" --> claude
-  woo -- "REST API + Application Password" --> wp
-  wp --> db
-  job -. "installs WP + Woo, writes Secret urumi-woo-api" .-> wp
-```
-
-| Component         | Source                            | Runs as                                   | Reachable from                                    |
-| ----------------- | --------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| gateway           | `apps/gateway`                    | Deployment `urumi-gateway`                | Ingress `app.<host>/api`, `/mcp`                  |
-| dashboard         | `apps/dashboard`                  | Deployment `urumi-dashboard` (nginx)      | Ingress `app.<host>/`                             |
-| woo-mcp           | `apps/woo-mcp`                    | Deployment `urumi-woo-mcp`                | gateway pods only (NetworkPolicy + shared secret) |
-| server-everything | `apps/everything/Dockerfile`      | Deployment `urumi-everything`             | gateway pods only (NetworkPolicy)                 |
-| WordPress + Woo   | official `wordpress` image        | Deployment + PVC                          | Ingress `store.<host>`                            |
-| MariaDB           | official `mariadb` image          | StatefulSet + PVC                         | in-cluster                                        |
-| Postgres 16       | official `postgres` image         | StatefulSet + PVC                         | gateway pods only (NetworkPolicy)                 |
-| bootstrap         | `charts/platform/files/bootstrap` | Helm `post-install,post-upgrade` hook Job | —                                                 |
-| GitLab MCP        | hosted by GitLab                  | external                                  | gateway, over the internet                        |
-
-## Prerequisites
+### Prerequisites
 
 | Tool              | Version                        | Why                                     |
 | ----------------- | ------------------------------ | --------------------------------------- |
@@ -128,7 +216,7 @@ You also need:
   (third upstream; see below). A classic PAT is refused by GitLab with
   `403 insufficient_granular_scope`.
 
-## Zero to running
+### Zero to running
 
 ```sh
 git clone https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase.git urumi && cd urumi
@@ -153,8 +241,16 @@ scripts/build-images.sh
 # 5. Install the chart. The bootstrap hook installs WordPress + WooCommerce and starts woo-mcp.
 helm upgrade --install urumi charts/platform -n urumi -f charts/platform/values-local.yaml --wait
 
-# 6. Run the demo flows (D1–D8 from the brief, plus D9–D15: permissions, scaling,
-#    observability, discovery mode, OAuth, hosted MCP servers, multiple stores).
+# 6. Seed: two members (User A, User B), the three upstreams (woo, everything, gitlab) and the
+#    demo product. Without a GitLab token: E2E_SKIP_GITLAB=1 tests/e2e/run.sh seed
+tests/e2e/run.sh seed
+
+# 7. Open http://store.localtest.me (shop) and http://app.localtest.me (dashboard); URLs and
+#    logins are in the table below.
+
+# 8. Run the demo flows (D1–D8 from the brief, plus D9–D15: permissions, scaling,
+#    observability, discovery mode, OAuth, hosted MCP servers, multiple stores). `all` starts a
+#    new run and seeds again first.
 tests/e2e/run.sh all
 ```
 
@@ -163,10 +259,10 @@ If you edit `.env.local` later (e.g. add a key), run `scripts/secrets-apply.sh` 
 
 **What the two hand-filled values gate**
 
-| Missing             | Effect                                                                                                                                                                                                                                                                                                          |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Gateway starts and logs `chat is disabled`. `POST /api/chat` answers **503** "Chat is not configured". **D2 and D4 fail**; the rest pass.                                                                                                                                                                       |
-| `GITLAB_MCP_TOKEN`  | `tests/e2e/seed-upstreams.sh` stops with `GITLAB_MCP_TOKEN is empty`, so the **seed step fails and `run.sh all` reports every step D1–D8 as `FAIL Dn: seed failed`**. A token without the right scope registers, but the `gitlab` upstream stays `down` and the seed's "all three up" check fails the same way. |
+| Missing             | Effect                                                                                                                                                                                                                                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY` | Gateway starts and logs `chat is disabled`. `POST /api/chat` answers **503** "Chat is not configured". **D2, D4 and D12 (its chat step) fail**; the rest pass.                                                                                                                                                   |
+| `GITLAB_MCP_TOKEN`  | `tests/e2e/seed-upstreams.sh` stops with `GITLAB_MCP_TOKEN is empty`, so the **seed step fails and `run.sh all` reports every step D1–D15 as `FAIL Dn: seed failed`**. A token without the right scope registers, but the `gitlab` upstream stays `down` and the seed's "all three up" check fails the same way. |
 
 The flows themselves only call `woo` and `everything` tools; GitLab is required because the
 seed (and D3's tool listing) checks that all three upstreams are up. The gateway itself does not
@@ -199,6 +295,12 @@ PASS D6
 PASS D7
 PASS D8
 PASS D9
+PASS D10
+PASS D11
+PASS D12
+PASS D13
+PASS D14
+PASS D15
 ```
 
 Single steps: `tests/e2e/run.sh D3 D5` (seeds first if there is no current run).
@@ -351,8 +453,12 @@ The same chart and templates; only the values file and the out-of-band Secrets c
 | `wooMcp.forwardedProto`      | empty                                               | `https` (in-cluster HTTP calls claim HTTPS to WordPress)             |
 | `*.persistence.storageClass` | `local-path`, 1–2 Gi                                | cluster default, 5 Gi                                                |
 | `*.image.repository` / `tag` | `k3d-urumi-registry.localhost:5005/…:dev`, `Always` | `registry.gitlab.com/<group>/<project>/…`, tag empty, `IfNotPresent` |
+| `gateway.resources`          | smaller (25m / 96Mi requests) for 8 GB laptops      | `values.yaml` defaults                                               |
+| `gateway.rateLimit`          | raised for the e2e load step (600/min per key)      | `values.yaml` defaults (120/min per key, 240/min per user)           |
+| `hosted.allowedImages`       | k3d registry + `docker.io/mcp/`, tags allowed       | project registry only, `requireDigest: true`                         |
+| `multiStore.enabled`         | `true` (max 3, `*.store.localtest.me`, http)        | `false` (opt in; `domainSuffix` `store.example.com`, https)          |
 
-Resource requests/limits are the same in both (set in `values.yaml`).
+Other resource requests/limits are the same in both (set in `values.yaml`).
 
 Steps on a single-node k3s VPS (Traefik is k3s's default ingress, matching `ingress.className`):
 
@@ -382,26 +488,27 @@ Steps on a single-node k3s VPS (Traefik is k3s's default ingress, matching `ingr
 `values-local.yaml` and `values-prod.yaml` and checks every container has probes and
 requests/limits and that no Secret is rendered. Not tested: TLS, cert-manager/ACME, a real
 StorageClass, pulling from a remote registry, `environmentType: production` with
-`X-Forwarded-Proto`, and there is no CI job that builds or pushes images (#22).
+`X-Forwarded-Proto`. CI builds the four images on MRs and pushes them to this project's registry
+on `main` and tags (#22), but no pipeline deploys them to a VPS.
 
 ## Stand-out items attempted
 
-Status against the brief's optional stand-out list, as of this commit. **Done** = implemented and
-tested here; **in review** = implemented, tested on the local cluster, MR open and awaiting the
-owner's approval (not on `main` yet); **partial** / **not done** say what is missing.
+Status against the brief's optional stand-out list, as of this commit. **Done** = implemented,
+merged to `main` and tested here; **partial** says what is missing. Requirement-by-requirement
+evidence: [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md).
 
-| #     | Brief item                     | Status                                                                                                                                        | What exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Where                                                                                                                                                                                             |
-| ----- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | Production-like VPS deployment | **partial**                                                                                                                                   | Same chart + `values-prod.yaml` (TLS hosts, `cookieSecure`, HTTPS App Passwords), documented steps; **never run on a real VPS**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [Local → VPS](#local--vps), issue #25                                                                                                                                                             |
-| 2     | Tool permissions               | **in review** ([!42](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/42))                    | Per-role and per-user rules (server × tool pattern × allow/deny); members read-only by default; restricted tools hidden from MCP `tools/list` and the chat tool set and rejected with `FORBIDDEN` (audited `denied`) on direct call; admin API + dashboard **Permissions** page; e2e D9                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | ADR 008, `packages/contracts/src/permissions.ts`, `apps/gateway/src/permissions/`, `tests/e2e/d9-permissions.sh` (on the MR branch)                                                               |
-| 3     | OAuth on the gateway           | **in review** (MR feat/oauth)                                                                                                                 | **MCP Authorization (OAuth 2.1)**: the gateway is authorization server + resource server; `/mcp` 401 carries `resource_metadata`; RFC 9728 + RFC 8414 metadata; **Dynamic Client Registration** (https / loopback redirects only, rate limited); `/oauth/authorize` with **PKCE S256 only**, `state`, RFC 8707 `resource`; consent page in the dashboard (existing login, unverified-name warning, Approve/Deny, CSRF token, no framing); single-use 60 s codes bound to client + redirect + PKCE; 1 h access tokens, **rotating refresh tokens with reuse detection**; tokens opaque and SHA-256-hashed; OAuth tokens and API keys share one path (permissions, rate limits, audit shows `oauth` + client name); **Connected apps** page (members: own, admins: all) revokes instantly; all state in Postgres (2 replicas); e2e **D13** with the official MCP SDK client                                                                                                                                                                                                                                                                                                                                                                                             | ADR 013, `apps/gateway/src/oauth/`, `apps/dashboard/src/pages/Consent.tsx`, `ConnectedApps.tsx`, `tests/e2e/d13-oauth.sh` (on the MR branch)                                                      |
-| 4     | Many tools                     | **in review** (MR feat/discovery-mode)                                                                                                        | **Discovery mode**: two meta-tools, `gateway__search_tools` (BM25 over the caller's _permitted_ tools; names + schemas) and `gateway__call_tool` (through `callTool`: permissions, timeout, audit of the real tool); MCP clients opt in with `/mcp?mode=discovery`; the chat agent switches automatically above `chatDiscoveryThreshold` (40) and shows the searches and real tools executed; e2e **D12** on 142 tools (5 synthetic copies of everything); size guards as before (≤ 200 tools per upstream)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | ADR 012, `apps/gateway/src/discovery/`, `tests/e2e/d12-discovery.sh` (on the MR branch)                                                                                                           |
-| 5     | Hosted MCP servers             | **in review** (MR feat/hosted-mcp)                                                                                                            | Admins add an MCP server **by container image** (API or the dashboard's "Hosted (container image)" mode); the gateway's reconciler (Postgres lease, works with 2 replicas) server-side-applies a Deployment + Service (+ env Secret) in namespace `urumi-hosted` with a **hardened pod template the admin cannot change** (non-root, read-only root, no caps, seccomp, no SA token, preset limits, TCP probes); the namespace enforces **Pod Security `restricted`**, a quota, **default deny** (ingress only from the gateway, egress DNS; internet only if enabled per server); **image allow-list** + optional digest pinning; env values sealed with secretbox, never returned; status Deploying / Connected / Unreachable / Failed with the pod's reason (ImagePullBackOff, CrashLoopBackOff …); auto-registered as `<slug>__*` tools under the normal permissions/audit/discovery path; gateway RBAC = one namespaced Role (no Secret reads, no exec); e2e **D14**                                                                                                                                                                                                                                                                                              | ADR 014, `apps/gateway/src/hosted/`, `charts/platform/templates/hosted/`, `tests/infra/hosted-chart.sh`, `tests/e2e/d14-hosted.sh` (on the MR branch)                                             |
-| 6     | Security hardening             | **done**, extended **in review** ([!43](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/43)) | On `main`: SSRF guard with DNS pinning, AES-256-GCM upstream credentials, SHA-256 API keys, login throttle, CSRF, CSP, sanitised upstream descriptions, result size caps, ingress NetworkPolicies for woo-mcp / everything / Postgres, non-root images, Secret Detection + SAST + IaC + container scanning in CI. In !43: **default-deny NetworkPolicies (ingress + egress)** with per-flow allows, **non-root WordPress**, live negative test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md); ADR 009, `charts/platform/templates/networkpolicy/`, `docs/NETWORK_POLICIES.md` (on the MR branch)                                                |
-| 7     | Scaling                        | **in review** (MR feat/scaling)                                                                                                               | **2 gateway replicas** (`values-local`/`values-prod`), PDB, soft anti-affinity, `preStop` drain; stateless `/mcp` so any replica serves any request; **per-key and per-user `/mcp` rate limits** as Postgres token buckets shared by replicas (429 + `Retry-After`, audited `rate_limited`); the 15 s health loop runs only on the holder of a Postgres lease (one writer); e2e **D10**: 60 × list+call in one session across both pods, a pod deleted mid-run with 0 failures, 429 burst                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | ADR 010, `apps/gateway/src/ratelimit/`, `core/leader.ts`, `tests/e2e/d10-scaling.sh` (on the MR branch)                                                                                           |
-| 8     | Observability                  | **in review** (MR feat/observability)                                                                                                         | **Prometheus** `/metrics` on an internal port (not routed by the Ingress, scraper-only NetworkPolicy): `tool_calls_total{server,tool,outcome,source}`, `tool_call_duration_seconds{server}`, `upstream_up`, last-check/last-success timestamps, `rate_limited_total`, process metrics; optional ServiceMonitor; **failure reasons** (timeout / DNS / connection refused / HTTP status / MCP error / …) in audit rows, API and caller-facing errors; `last_ok_at` per upstream; admin **Health / Metrics** page with per-server calls, error rate, p50/p95 over a window (from `audit_log`, correct across replicas); e2e **D11**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | ADR 011, `apps/gateway/src/metrics/`, `packages/contracts/src/failures.ts`, `apps/dashboard/src/pages/Health.tsx`, `tests/e2e/d11-observability.sh` (on the MR branch)                            |
-| 9     | Upgrades and rollback          | **done**                                                                                                                                      | `helm upgrade --install` / `helm history` / `helm rollback` procedure with the rules for stateful parts, idempotent post-upgrade bootstrap hook, forward-only additive migrations, and a CI canary that promotes or rolls back the gateway automatically                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | [Upgrades and rollback](#upgrades-and-rollback), [`docs/DESIGN.md`](docs/DESIGN.md) §12, ADR 003                                                                                                  |
-| Bonus | Multi-store provisioning       | **in review** (MR feat/multi-store)                                                                                                           | Admins **create and delete WooCommerce stores** from the dashboard (Stores page) or `POST /api/stores` (slug, name, admin email; slug = DNS label, reserved names refused, limit `multiStore.maxStores`, default 3 locally). The gateway's provisioner (Postgres lease, level-triggered, resumes after a gateway restart) creates namespace `store-<slug>` with **Pod Security `restricted`**, ResourceQuota + LimitRange, **default-deny NetworkPolicies** (only the store's own flows; no cross-store traffic), MariaDB + WordPress + PVCs, the built-in store's **bootstrap Job** (WP + WooCommerce + COD + Application Password), its own **woo-mcp**, an Ingress `http://<slug>.store.localtest.me`, generated passwords that never leave the namespace; then **auto-registers** the upstream `<slug>` (`shop2__list_products`) with member read-only defaults. Status Provisioning / Ready / Failed with reason (timeout, ImagePullBackOff, Job failed) + Retry / Deleting; delete removes the namespace with its volumes, the upstream, rules and tools. Gateway RBAC: ClusterRole for namespaces + RoleBindings limited by `bind` to two chart-defined roles, confined to `store-*` by a **ValidatingAdmissionPolicy**; no Secret reads anywhere; e2e **D15** | ADR 015, `apps/gateway/src/stores/`, `apps/dashboard/src/pages/Stores.tsx`, `charts/platform/templates/stores/`, `tests/infra/stores-chart.sh`, `tests/e2e/d15-multi-store.sh` (on the MR branch) |
+| #     | Brief item                     | Status                                                                                                                            | What exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Where                                                                                                                                                                          |
+| ----- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Production-like VPS deployment | **partial**                                                                                                                       | Same chart + `values-prod.yaml` (TLS hosts, `cookieSecure`, HTTPS App Passwords), documented steps; **never run on a real VPS**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | [Local → VPS](#local--vps), issue #25                                                                                                                                          |
+| 2     | Tool permissions               | **done** ([!42](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/42))             | Per-role and per-user rules (server × tool pattern × allow/deny); members read-only by default; restricted tools hidden from MCP `tools/list` and the chat tool set and rejected with `FORBIDDEN` (audited `denied`) on direct call; admin API + dashboard **Permissions** page; e2e D9                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | ADR 008, `packages/contracts/src/permissions.ts`, `apps/gateway/src/permissions/`, `tests/e2e/d9-permissions.sh`                                                               |
+| 3     | OAuth on the gateway           | **done** (MR feat/oauth)                                                                                                          | **MCP Authorization (OAuth 2.1)**: the gateway is authorization server + resource server; `/mcp` 401 carries `resource_metadata`; RFC 9728 + RFC 8414 metadata; **Dynamic Client Registration** (https / loopback redirects only, rate limited); `/oauth/authorize` with **PKCE S256 only**, `state`, RFC 8707 `resource`; consent page in the dashboard (existing login, unverified-name warning, Approve/Deny, CSRF token, no framing); single-use 60 s codes bound to client + redirect + PKCE; 1 h access tokens, **rotating refresh tokens with reuse detection**; tokens opaque and SHA-256-hashed; OAuth tokens and API keys share one path (permissions, rate limits, audit shows `oauth` + client name); **Connected apps** page (members: own, admins: all) revokes instantly; all state in Postgres (2 replicas); e2e **D13** with the official MCP SDK client                                                                                                                                                                                                                                                                                                                                                                                             | ADR 013, `apps/gateway/src/oauth/`, `apps/dashboard/src/pages/Consent.tsx`, `ConnectedApps.tsx`, `tests/e2e/d13-oauth.sh`                                                      |
+| 4     | Many tools                     | **done** (MR feat/discovery-mode)                                                                                                 | **Discovery mode**: two meta-tools, `gateway__search_tools` (BM25 over the caller's _permitted_ tools; names + schemas) and `gateway__call_tool` (through `callTool`: permissions, timeout, audit of the real tool); MCP clients opt in with `/mcp?mode=discovery`; the chat agent switches automatically above `chatDiscoveryThreshold` (40) and shows the searches and real tools executed; e2e **D12** on 142 tools (5 synthetic copies of everything); size guards as before (≤ 200 tools per upstream)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | ADR 012, `apps/gateway/src/discovery/`, `tests/e2e/d12-discovery.sh`                                                                                                           |
+| 5     | Hosted MCP servers             | **done** (MR feat/hosted-mcp)                                                                                                     | Admins add an MCP server **by container image** (API or the dashboard's "Hosted (container image)" mode); the gateway's reconciler (Postgres lease, works with 2 replicas) server-side-applies a Deployment + Service (+ env Secret) in namespace `urumi-hosted` with a **hardened pod template the admin cannot change** (non-root, read-only root, no caps, seccomp, no SA token, preset limits, TCP probes); the namespace enforces **Pod Security `restricted`**, a quota, **default deny** (ingress only from the gateway, egress DNS; internet only if enabled per server); **image allow-list** + optional digest pinning; env values sealed with secretbox, never returned; status Deploying / Connected / Unreachable / Failed with the pod's reason (ImagePullBackOff, CrashLoopBackOff …); auto-registered as `<slug>__*` tools under the normal permissions/audit/discovery path; gateway RBAC = one namespaced Role (no Secret reads, no exec); e2e **D14**                                                                                                                                                                                                                                                                                              | ADR 014, `apps/gateway/src/hosted/`, `charts/platform/templates/hosted/`, `tests/infra/hosted-chart.sh`, `tests/e2e/d14-hosted.sh`                                             |
+| 6     | Security hardening             | **done** (extended by [!43](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/36848717/showcase/-/merge_requests/43)) | On `main`: SSRF guard with DNS pinning, AES-256-GCM upstream credentials, SHA-256 API keys, login throttle, CSRF, CSP, sanitised upstream descriptions, result size caps, ingress NetworkPolicies for woo-mcp / everything / Postgres, non-root images, Secret Detection + SAST + IaC + container scanning in CI. In !43: **default-deny NetworkPolicies (ingress + egress)** with per-flow allows, **non-root WordPress**, live negative test                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md); ADR 009, `charts/platform/templates/networkpolicy/`, `docs/NETWORK_POLICIES.md`                                                |
+| 7     | Scaling                        | **done** (MR feat/scaling)                                                                                                        | **2 gateway replicas** (`values-local`/`values-prod`), PDB, soft anti-affinity, `preStop` drain; stateless `/mcp` so any replica serves any request; **per-key and per-user `/mcp` rate limits** as Postgres token buckets shared by replicas (429 + `Retry-After`, audited `rate_limited`); the 15 s health loop runs only on the holder of a Postgres lease (one writer); e2e **D10**: 60 × list+call in one session across both pods, a pod deleted mid-run with 0 failures, 429 burst                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | ADR 010, `apps/gateway/src/ratelimit/`, `core/leader.ts`, `tests/e2e/d10-scaling.sh`                                                                                           |
+| 8     | Observability                  | **done** (MR feat/observability)                                                                                                  | **Prometheus** `/metrics` on an internal port (not routed by the Ingress, scraper-only NetworkPolicy): `tool_calls_total{server,tool,outcome,source}`, `tool_call_duration_seconds{server}`, `upstream_up`, last-check/last-success timestamps, `rate_limited_total`, process metrics; optional ServiceMonitor; **failure reasons** (timeout / DNS / connection refused / HTTP status / MCP error / …) in audit rows, API and caller-facing errors; `last_ok_at` per upstream; admin **Health / Metrics** page with per-server calls, error rate, p50/p95 over a window (from `audit_log`, correct across replicas); e2e **D11**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | ADR 011, `apps/gateway/src/metrics/`, `packages/contracts/src/failures.ts`, `apps/dashboard/src/pages/Health.tsx`, `tests/e2e/d11-observability.sh`                            |
+| 9     | Upgrades and rollback          | **done**                                                                                                                          | `helm upgrade --install` / `helm history` / `helm rollback` procedure with the rules for stateful parts, idempotent post-upgrade bootstrap hook, forward-only additive migrations, and a CI canary that promotes or rolls back the gateway automatically                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | [Upgrades and rollback](#upgrades-and-rollback), [`docs/DESIGN.md`](docs/DESIGN.md) §12, ADR 003                                                                               |
+| Bonus | Multi-store provisioning       | **done** (MR feat/multi-store)                                                                                                    | Admins **create and delete WooCommerce stores** from the dashboard (Stores page) or `POST /api/stores` (slug, name, admin email; slug = DNS label, reserved names refused, limit `multiStore.maxStores`, default 3 locally). The gateway's provisioner (Postgres lease, level-triggered, resumes after a gateway restart) creates namespace `store-<slug>` with **Pod Security `restricted`**, ResourceQuota + LimitRange, **default-deny NetworkPolicies** (only the store's own flows; no cross-store traffic), MariaDB + WordPress + PVCs, the built-in store's **bootstrap Job** (WP + WooCommerce + COD + Application Password), its own **woo-mcp**, an Ingress `http://<slug>.store.localtest.me`, generated passwords that never leave the namespace; then **auto-registers** the upstream `<slug>` (`shop2__list_products`) with member read-only defaults. Status Provisioning / Ready / Failed with reason (timeout, ImagePullBackOff, Job failed) + Retry / Deleting; delete removes the namespace with its volumes, the upstream, rules and tools. Gateway RBAC: ClusterRole for namespaces + RoleBindings limited by `bind` to two chart-defined roles, confined to `store-*` by a **ValidatingAdmissionPolicy**; no Secret reads anywhere; e2e **D15** | ADR 015, `apps/gateway/src/stores/`, `apps/dashboard/src/pages/Stores.tsx`, `charts/platform/templates/stores/`, `tests/infra/stores-chart.sh`, `tests/e2e/d15-multi-store.sh` |
 
 Beyond the list: the self-healing release pipeline on GitLab (canary → automatic rollback →
 incident → Duo-written fix → verified → postmortem), described at the top of this README.
@@ -483,16 +590,22 @@ urumi-bootstrap   Complete   1/1           101s       21m
 ## Repo layout
 
 ```
-apps/woo-mcp/        WooCommerce MCP server (TypeScript, Streamable HTTP, internal-only)
-apps/gateway/        MCP gateway + admin API + chat agent backend (Fastify, Postgres)
-apps/dashboard/      React + Vite admin/member UI and chat panel (served by nginx)
-apps/everything/     Dockerfile for @modelcontextprotocol/server-everything (upstream 2)
-packages/contracts/  Shared zod schemas: API, DB schema (sql/), tool naming, error envelope
-charts/platform/     The one Helm chart; values.yaml, values-local.yaml, values-prod.yaml
-tests/e2e/           D1–D9 scripted flows (run.sh <step|all>), seed scripts
-tests/infra/         Cluster checks: chart, persistence, bootstrap, NetworkPolicies, auth
-scripts/             dev-setup, gen-env, cluster-up/down, secrets-apply, build-images
-docs/                REQUIREMENTS, PLAN, DESIGN, THREAT_MODEL, adr/
+.
+├── apps/
+│   ├── gateway/        MCP gateway + admin API + OAuth server + chat backend (Fastify, Postgres)
+│   ├── dashboard/      React + Vite admin/member UI and chat panel (served by nginx)
+│   ├── woo-mcp/        WooCommerce MCP server (TypeScript, Streamable HTTP, internal-only)
+│   └── everything/     Dockerfile for @modelcontextprotocol/server-everything (upstream 2)
+├── packages/
+│   └── contracts/      Shared zod schemas: API, DB schema (sql/), tool naming, permissions, errors
+├── charts/
+│   └── platform/       The one Helm chart; values.yaml, values-local.yaml, values-prod.yaml
+├── tests/
+│   ├── e2e/            seed + D1–D15 scripted flows (run.sh <step|all>)
+│   └── infra/          chart, persistence, bootstrap, NetworkPolicy and auth checks
+├── scripts/            dev-setup, gen-env, cluster-up/down, secrets-apply, build-images, canary/
+├── .gitlab/            CI includes (ci/) and the Duo Agent Platform flows (flows/)
+└── docs/               design, threat model, requirements, ADRs, guides
 ```
 
 ## Tests
@@ -506,15 +619,32 @@ npm run typecheck      # tsc --noEmit in every workspace
 - Gateway tests run against a real Postgres: a throwaway Docker container locally, or
   `TEST_DATABASE_URL` (CI uses a `postgres:16-alpine` service). Upstreams are fake MCP servers
   (`apps/gateway/test/helpers/fake-upstream.ts`); only external boundaries are faked.
-- Cluster checks (need the local cluster): `tests/infra/chart-checks.sh` (offline), `tests/infra/hosted-chart.sh` (offline, hosted RBAC/isolation), `tests/infra/stores-chart.sh` (offline, multi-store RBAC + admission policy),
-  `persistence.sh`, `store-bootstrap.sh`, `gateway-db.sh`, `gateway-auth.sh`, `upstreams.sh`,
-  `woo-mcp-netpol.sh`, plus `scripts/smoke-ingress.sh`.
+- Offline chart/script checks: `tests/infra/chart-checks.sh`, `canary-chart.sh`, `hosted-chart.sh`
+  (hosted RBAC/isolation), `stores-chart.sh` (multi-store RBAC + admission policy),
+  `env-scripts.test.sh`. Cluster checks (need the local cluster): `persistence.sh`,
+  `store-bootstrap.sh`, `gateway-db.sh`, `gateway-auth.sh`, `upstreams.sh`, `woo-mcp-netpol.sh`,
+  `netpol-default-deny.sh`, plus `scripts/smoke-ingress.sh`.
 - End to end: `tests/e2e/run.sh all`.
 
-**CI** (`.gitlab-ci.yml`): `lint` (lint + typecheck), `test` (all workspaces with a Postgres
-service), and GitLab's `secret_detection`, `semgrep-sast` and `kics-iac-sast` templates in a
-`secure` stage. CI does not build images, run the infra checks or run the e2e flows; those run
-against a local cluster.
+**CI** (`.gitlab-ci.yml` + `.gitlab/ci/`): `lint` (lint + typecheck), `test` (all workspaces with a
+Postgres service), GitLab's `secret_detection`, `semgrep-sast` and `kics-iac-sast` templates,
+`risk:classify`, release jobs (`release:image:build` on MRs; image push, `container_scanning` and
+chart publish on `main`/tags), the gateway `canary` (throwaway k3d in CI; automatic on `main`,
+manual on MRs) and the Duo dispatch jobs. CI does not run `tests/infra/*` or the D1–D15 flows;
+those run against a local cluster (the canary only runs the seed).
+
+## Docs index
+
+| Document                                                       | What it covers                                                       |
+| -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [`docs/RUN_ON_YOUR_COMPUTER.md`](docs/RUN_ON_YOUR_COMPUTER.md) | Plain-language setup guide for a first run                           |
+| [`docs/DESIGN.md`](docs/DESIGN.md)                             | Components, call path, data model, naming, failure isolation, chart  |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)                 | Threats, mitigations, residual risks, what is not done               |
+| [`docs/NETWORK_POLICIES.md`](docs/NETWORK_POLICIES.md)         | Default-deny NetworkPolicies and non-root containers: recorded tests |
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)                 | Requirement IDs (K, W, G, T, C, D, R, H, O)                          |
+| [`docs/SUBMISSION_CHECKLIST.md`](docs/SUBMISSION_CHECKLIST.md) | Each requirement mapped to code, tests and docs; known limitations   |
+| [`docs/HACKATHON.md`](docs/HACKATHON.md)                       | The self-healing release pipeline on GitLab                          |
+| [`docs/adr/`](docs/adr/)                                       | Architecture decision records 000–015                                |
 
 ## License
 

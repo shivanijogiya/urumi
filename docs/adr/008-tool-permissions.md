@@ -1,6 +1,6 @@
 # ADR 008 — Tool permissions: per-role and per-user rules, enforced on the one call path
 
-Status: proposed (needs Aadi: new table, new admin API, default policy changes what members can do)
+Status: accepted, merged to `main` (was proposed: needs Aadi: new table, new admin API, default policy changes what members can do)
 · Brief stand-out item 2 ("Tool permissions") · Amends DESIGN §7 (roles) and THREAT_MODEL 3.5/3.7
 
 ## Context

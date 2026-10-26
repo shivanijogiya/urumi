@@ -1,6 +1,6 @@
 # ADR 010 — Scaling: several gateway replicas, shared rate limits, one health writer
 
-Status: proposed (needs Aadi: new tables, new chart objects, default replica count changes)
+Status: accepted, merged to `main` (was proposed: needs Aadi: new tables, new chart objects, default replica count changes)
 · Brief stand-out item 7 ("Scaling") · Amends DESIGN §10/§11 and THREAT_MODEL 3.6
 
 ## Context

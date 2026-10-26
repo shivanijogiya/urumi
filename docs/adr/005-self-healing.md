@@ -1,6 +1,6 @@
 # ADR 005 — Self-healing release loop: diagnose, fix MR, verify by canary, postmortem
 
-Status: proposed (needs Aadi: new flow to register, CI semantics change for autoheal MRs and for
+Status: accepted, merged to `main` (was proposed: needs Aadi: new flow to register, CI semantics change for autoheal MRs and for
 the canary baseline) · Issue #28 · Scope G4 option B · Amends ADR 003 (stable baseline, seeded
 orders) and ADR 004 (incident flow gains a healer step) · Amended by ADR 007 (#27: the postmortem
 starts on a mention of its account, not on MR approval) and by #32 (the verdict is read from the MR

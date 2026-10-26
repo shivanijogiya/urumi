@@ -1,6 +1,6 @@
 # ADR 007 — Duo flows: dispatch by assignment from CI, goal = an iid
 
-Status: proposed (needs Aadi: new CI variable `DUO_DISPATCH_TOKEN`, flows to re-paste) · Issue #27
+Status: accepted, merged to `main` (was proposed: needs Aadi: new CI variable `DUO_DISPATCH_TOKEN`, flows to re-paste) · Issue #27
 · Requirement H4 · Amends ADR 004 (flow triggers, incident issue created by CI) and ADR 005
 (postmortem trigger)
 

@@ -95,11 +95,11 @@ Each flow is one script `tests/e2e/dN-*.sh`, printing `PASS Dn` / `FAIL Dn: <rea
 
 ## 9. Optional (O) — not started before #21
 
-| ID  | Item                                     | Issue                                                                  |
-| --- | ---------------------------------------- | ---------------------------------------------------------------------- |
-| O1  | Live VPS deployment with the same chart  | #25                                                                    |
-| O2  | Multi-store provisioning                 | not planned                                                            |
-| O3  | Per-tool permissions, OAuth, rate limits | per-tool permissions: ADR 008, e2e D9; OAuth, rate limits: not planned |
+| ID  | Item                                     | Issue                                                                                                |
+| --- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| O1  | Live VPS deployment with the same chart  | #25                                                                                                  |
+| O2  | Multi-store provisioning                 | done: ADR 015, e2e D15                                                                               |
+| O3  | Per-tool permissions, OAuth, rate limits | per-tool permissions: ADR 008, e2e D9; OAuth: ADR 013, e2e D13; `/mcp` rate limits: ADR 010, e2e D10 |
 
 ## 10. Fixed conventions (decided; change only via ADR)
 
