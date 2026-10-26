@@ -83,3 +83,19 @@ describe('006_hosted.sql', () => {
     expect(hosted).not.toMatch(/env_values|env_plain|env\s+(jsonb|text)\b/);
   });
 });
+
+describe('007_stores.sql', () => {
+  const stores = readFileSync(join(MIGRATIONS_DIR, '007_stores.sql'), 'utf8');
+  it('adds stores (1:1 with upstreams) and the upstreams.store flag, additive only', () => {
+    expect(stores).toContain(
+      'ALTER TABLE upstreams ADD COLUMN store boolean NOT NULL DEFAULT false',
+    );
+    expect(stores).toMatch(/CREATE TABLE stores \(/);
+    expect(stores).toMatch(/id\s+uuid PRIMARY KEY REFERENCES upstreams ON DELETE CASCADE/);
+    expect(stores).not.toMatch(/\bDROP\b/);
+  });
+  it('stores no password or secret column', () => {
+    const columns = stores.slice(stores.indexOf('CREATE TABLE stores'));
+    expect(columns).not.toMatch(/password|secret|ciphertext/i);
+  });
+});
