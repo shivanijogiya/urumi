@@ -14,7 +14,7 @@ An admin stores one credential per upstream (e.g. the GitLab token). It is encry
 (AES-256-GCM, `crypto/secretbox.ts`, key from the Secret `urumi-env`), decrypted only inside
 `callTool` for the outgoing request (`upstreams/decrypt-for-call.ts`), and never returned by any
 API, log line or the dashboard (members do not even see the upstream URL). A member can therefore
-only *use* it, and only through the gateway: they can call the tools their tool permissions allow
+only _use_ it, and only through the gateway: they can call the tools their tool permissions allow
 (ADR 008: members are read-only by default), `/mcp` calls are rate-limited per key and per user, and
 every call is written to `audit_log` under their own user id. What they **can** do is anything
 those permitted tools can do with the upstream account's rights — the credential's scope is the
@@ -23,7 +23,7 @@ the credential, use it outside the gateway, or call a tool they were not granted
 audited `denied`).
 
 **Why client tokens are not passed through to upstream servers.**
-A client's API key or OAuth token proves *who the caller is to the gateway*; it is checked
+A client's API key or OAuth token proves _who the caller is to the gateway_; it is checked
 (SHA-256 lookup) and consumed at `/mcp`, and the outgoing request carries only the upstream's own
 stored credential (`credentialHeaders` in `upstreams/decrypt-for-call.ts`). Passing the client's
 token on would (1) hand a gateway credential to every upstream, so a malicious or compromised
@@ -38,7 +38,7 @@ characters and capped at 500 characters; tool names are sanitised and prefixed w
 slug, so an upstream cannot impersonate another server's tool (`core/registry.ts`, `naming.ts`).
 Descriptions are sent only as tool definitions, never in the system prompt, and the system prompt
 tells the model that tool descriptions and results are untrusted. Upstream `instructions` are
-never forwarded. Even if the model is fooled, it can only call tools the *logged-in user* is
+never forwarded. Even if the model is fooled, it can only call tools the _logged-in user_ is
 allowed to call, at most 8 rounds per message, and each call is audited. Remaining risk: an admin's
 chat (or a member with write grants) can still be tricked into a write without confirmation (§4).
 
@@ -46,7 +46,7 @@ chat (or a member with write grants) can still be tricked into a write without c
 Very little. A member cannot see or revoke another member's API keys, cannot read another member's
 audit rows (the API forces the filter to their own id), cannot change roles, users, upstreams or
 permissions (`requireAdmin`), and has their own `/mcp` rate-limit bucket. Chat history is not stored on
-the server. What they *can* affect: data in the shared upstream accounts (e.g. if granted a write
+the server. What they _can_ affect: data in the shared upstream accounts (e.g. if granted a write
 tool on the store, they can change an order another member also sees) — but every such call is
 audited under their name. An admin can do more (create/disable users, revoke anyone's keys, change
 permissions) but cannot demote or disable themselves, and the last admin cannot be removed.
