@@ -136,74 +136,108 @@ export class HttpKubeApi implements KubeApi {
     return res.items ?? [];
   }
 
-  private async call(
+  private call(
     method: 'GET' | 'PATCH' | 'DELETE',
     path: string,
     body?: string,
     contentType?: string,
   ): Promise<unknown> {
-    const dir = this.opts.saDir ?? SA_DIR;
-    this.ca ??= readFile(`${dir}/ca.crt`);
-    const [ca, token] = await Promise.all([
-      this.ca,
-      readFile(`${dir}/token`, 'utf8').then((t) => t.trim()),
-    ]);
-    const timeoutMs = this.opts.timeoutMs ?? KUBE_TIMEOUT_MS;
-    return new Promise((resolve, reject) => {
-      const req = request(
-        {
-          host: this.opts.host,
-          port: this.opts.port,
-          method,
-          path,
-          ca,
-          timeout: timeoutMs,
-          headers: {
-            authorization: `Bearer ${token}`,
-            accept: 'application/json',
-            ...(body
-              ? { 'content-type': contentType, 'content-length': Buffer.byteLength(body) }
-              : {}),
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          let size = 0;
-          res.on('data', (c: Buffer) => {
-            size += c.length;
-            if (size > MAX_BODY_BYTES)
-              req.destroy(new KubeError(0, 'Kubernetes API response too large'));
-            else chunks.push(c);
-          });
-          res.on('end', () => {
-            const text = Buffer.concat(chunks).toString('utf8');
-            let json: unknown = null;
-            try {
-              json = text ? JSON.parse(text) : null;
-            } catch {
-              /* non-JSON error page */
-            }
-            const status = res.statusCode ?? 0;
-            if (status >= 200 && status < 300) return resolve(json);
-            reject(new KubeError(status, statusDetail(status, json)));
-          });
-        },
-      );
-      req.on('timeout', () => req.destroy(new KubeError(0, 'Kubernetes API timed out')));
-      req.on('error', (err) =>
-        reject(
-          err instanceof KubeError
-            ? err
-            : new KubeError(
-                0,
-                `Kubernetes API unreachable (${(err as NodeJS.ErrnoException).code ?? 'error'})`,
-              ),
-        ),
-      );
-      if (body) req.write(body);
-      req.end();
-    });
+    this.ca ??= readFile(`${this.opts.saDir ?? SA_DIR}/ca.crt`);
+    return kubeRequest(
+      { ...this.opts, ca: this.ca },
+      { method, path, ...(body ? { body } : {}), ...(contentType ? { contentType } : {}) },
+    );
   }
+}
+
+/** Where and how to reach the API server; shared by the hosted and the store clients. */
+export interface KubeTransport {
+  host: string;
+  port: number;
+  /** Directory with `token` (re-read per request) and `ca.crt`. */
+  saDir?: string;
+  /** The CA, read once by the caller. */
+  ca: Promise<Buffer>;
+  timeoutMs?: number;
+}
+
+/**
+ * One HTTPS request to the API server with the projected ServiceAccount token: 5 s timeout, 4 MiB
+ * response cap, JSON in and out. Errors are KubeErrors carrying the HTTP status and the API's own
+ * short reason (never the token or the request body).
+ */
+export async function kubeRequest(
+  t: KubeTransport,
+  req: {
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+    path: string;
+    body?: string;
+    contentType?: string;
+  },
+): Promise<unknown> {
+  const dir = t.saDir ?? SA_DIR;
+  const [ca, token] = await Promise.all([
+    t.ca,
+    readFile(`${dir}/token`, 'utf8').then((v) => v.trim()),
+  ]);
+  const timeoutMs = t.timeoutMs ?? KUBE_TIMEOUT_MS;
+  const { method, path, body, contentType } = req;
+  return new Promise((resolve, reject) => {
+    const r = request(
+      {
+        host: t.host,
+        port: t.port,
+        method,
+        path,
+        ca,
+        timeout: timeoutMs,
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json',
+          ...(body
+            ? {
+                'content-type': contentType ?? 'application/json',
+                'content-length': Buffer.byteLength(body),
+              }
+            : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size > MAX_BODY_BYTES) r.destroy(new KubeError(0, 'Kubernetes API response too large'));
+          else chunks.push(c);
+        });
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json: unknown = null;
+          try {
+            json = text ? JSON.parse(text) : null;
+          } catch {
+            /* non-JSON error page */
+          }
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) return resolve(json);
+          reject(new KubeError(status, statusDetail(status, json)));
+        });
+      },
+    );
+    r.on('timeout', () => r.destroy(new KubeError(0, 'Kubernetes API timed out')));
+    r.on('error', (err) =>
+      reject(
+        err instanceof KubeError
+          ? err
+          : new KubeError(
+              0,
+              `Kubernetes API unreachable (${(err as NodeJS.ErrnoException).code ?? 'error'})`,
+            ),
+      ),
+    );
+    if (body) r.write(body);
+    r.end();
+  });
 }
 
 /** `HTTP 403 Forbidden: <API message, 200 chars>`; the API's messages name objects, not secrets. */

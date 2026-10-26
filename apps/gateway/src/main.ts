@@ -10,6 +10,8 @@ import { GatewayMetrics } from './metrics/metrics.js';
 import { startMetricsServer } from './metrics/server.js';
 import { HttpKubeApi } from './hosted/kube.js';
 import { HOSTED_LEASE } from './hosted/reconciler.js';
+import { HttpStoreKubeApi } from './stores/kube.js';
+import { loadBootstrapScripts, STORES_LEASE } from './stores/provisioner.js';
 import { buildApp, LOGGER_OPTIONS } from './server.js';
 
 const DB_WAIT_MS = 120_000;
@@ -26,6 +28,11 @@ async function main(): Promise<void> {
     }
     throw err;
   }
+
+  // Multiple stores (ADR 015): the bootstrap scripts come from the chart's ConfigMap mount.
+  const storeScripts = config.multiStore
+    ? await loadBootstrapScripts(config.multiStore.scriptsDir)
+    : null;
 
   // The pool only logs after startup, by which time `server` exists.
   const pool = createPool(config.db, { error: (obj, msg) => server.log.error(obj, msg) });
@@ -65,6 +72,21 @@ async function main(): Promise<void> {
           },
         }
       : {}),
+    ...(config.multiStore && storeScripts
+      ? {
+          stores: {
+            kube: new HttpStoreKubeApi({
+              host: config.multiStore.kubeHost,
+              port: config.multiStore.kubePort,
+            }),
+            settings: config.multiStore.settings,
+            maxStores: config.multiStore.maxStores,
+            scripts: storeScripts,
+            lease: new Lease(pool, STORES_LEASE, config.podName),
+          },
+        }
+      : {}),
+    builtInStore: config.builtInStore,
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
   if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {
@@ -84,6 +106,7 @@ async function main(): Promise<void> {
     server.log.info({ signal }, 'shutting down');
     await health.stop().catch(() => undefined);
     await server.hostedReconciler?.stop().catch(() => undefined);
+    await server.storeProvisioner?.stop().catch(() => undefined);
     await metricsServer?.close().catch(() => undefined);
     await server.close().catch(() => undefined);
     await pool.end().catch(() => undefined);
@@ -107,6 +130,10 @@ async function main(): Promise<void> {
   if (server.hostedReconciler) {
     server.hostedReconciler.start();
     server.log.info({ namespace: config.hosted?.namespace }, 'hosted MCP servers enabled');
+  }
+  if (server.storeProvisioner) {
+    server.storeProvisioner.start();
+    server.log.info({ maxStores: config.multiStore?.maxStores }, 'multiple stores enabled');
   }
 }
 

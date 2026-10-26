@@ -31,6 +31,7 @@ import {
 } from '../upstreams/ssrf.js';
 import { MAX_RESULT_RESPONSE_BYTES } from '../core/limits.js';
 import { serviceHost } from '../hosted/manifests.js';
+import { storeServiceHost } from '../stores/names.js';
 import { withBodyLimit } from './body-limit.js';
 import { pinnedFetch } from './pinned-fetch.js';
 
@@ -51,7 +52,7 @@ export type UpstreamTarget = Pick<
   | 'credential_iv'
   | 'credential_tag'
 > &
-  Partial<Pick<UpstreamRow, 'slug' | 'hosted'>>;
+  Partial<Pick<UpstreamRow, 'slug' | 'hosted' | 'store'>>;
 
 /**
  * `timeout`: the deadline passed. `unreachable`: no usable MCP session (blocked address, DNS,
@@ -90,6 +91,11 @@ export interface UpstreamClientOptions {
    * (`mcp-<slug>.<namespace>.svc.cluster.local`) and nothing else private; other rows never get it.
    */
   hostedNamespace?: string;
+  /**
+   * Stores (ADR 015): a row with `store` may reach exactly its store's woo-mcp Service host
+   * (`woo-mcp.store-<slug>.svc.cluster.local`) and nothing else private. Off unless multi-store is.
+   */
+  storeHosts?: boolean;
   /** Debug log for swallowed cleanup failures (session DELETE). */
   log?: { debug(obj: object, msg: string): void };
 }
@@ -205,7 +211,9 @@ export class UpstreamClient {
         allow:
           target.hosted && target.slug && this.opts.hostedNamespace
             ? [serviceHost(target.slug, this.opts.hostedNamespace)]
-            : this.opts.allowedHosts,
+            : target.store && target.slug && this.opts.storeHosts
+              ? [storeServiceHost(target.slug)]
+              : this.opts.allowedHosts,
         ...(this.opts.lookup ? { lookup: this.opts.lookup } : {}),
         timeoutMs: Math.min(DNS_TIMEOUT_MS, timeoutMs),
       });

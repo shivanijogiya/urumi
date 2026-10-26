@@ -40,6 +40,11 @@ export const ROUTES = {
   createHostedServer: { method: 'POST', path: '/api/hosted-servers', auth: 'admin' },
   updateHostedServer: { method: 'PATCH', path: '/api/hosted-servers/:id', auth: 'admin' },
   deleteHostedServer: { method: 'DELETE', path: '/api/hosted-servers/:id', auth: 'admin' },
+  // Stores (ADR 015): extra WooCommerce stores, each in its own namespace, auto-registered.
+  listStores: { method: 'GET', path: '/api/stores', auth: 'admin' },
+  createStore: { method: 'POST', path: '/api/stores', auth: 'admin' },
+  deleteStore: { method: 'DELETE', path: '/api/stores/:id', auth: 'admin' },
+  retryStore: { method: 'POST', path: '/api/stores/:id/retry', auth: 'admin' },
   listTools: { method: 'GET', path: '/api/tools', auth: 'session' },
   listAudit: { method: 'GET', path: '/api/audit', auth: 'session' },
   listPermissions: { method: 'GET', path: '/api/permissions', auth: 'admin' },
@@ -161,6 +166,8 @@ export const UpstreamSchema = z.strictObject({
   toolCount: z.number().int().nonnegative(),
   /** Run by the gateway from a container image (ADR 014); managed via /api/hosted-servers. */
   hosted: z.boolean().optional(),
+  /** The woo-mcp of a provisioned store (ADR 015); managed via /api/stores. */
+  store: z.boolean().optional(),
 });
 export const UpstreamResponseSchema = z.object({ upstream: UpstreamSchema });
 export const UpstreamListResponseSchema = z.object({ upstreams: z.array(UpstreamSchema) });
@@ -247,6 +254,80 @@ export const HostedServerListResponseSchema = z.object({
   requireDigest: z.boolean(),
   maxServers: z.number().int(),
   servers: z.array(HostedServerSchema),
+});
+
+// ── Stores (ADR 015) ─────────────────────────────────────────────────────────────────────────
+/**
+ * Store slug: also the upstream slug (tools `<slug>__list_products`), the namespace `store-<slug>`
+ * and the storefront host `<slug>.<domain suffix>`. A DNS-1123 label of 2–20 chars that starts with
+ * a letter (so the host is never all digits).
+ */
+export const STORE_SLUG_RE = /^[a-z](?:[a-z0-9-]{0,18}[a-z0-9])$/;
+/** Names a store may not take: the built-in upstreams, platform hosts and Kubernetes-ish words. */
+export const RESERVED_STORE_SLUGS: readonly string[] = [
+  ...RESERVED_SLUGS,
+  'woo',
+  'everything',
+  'gitlab',
+  'default',
+  'store',
+  'stores',
+  'app',
+  'www',
+  'api',
+  'admin',
+  'mcp',
+  'urumi',
+  'hosted',
+  'kube',
+  'system',
+  'public',
+];
+export const StoreSlugSchema = z
+  .string()
+  .regex(
+    STORE_SLUG_RE,
+    'Must be 2–20 lowercase letters, digits or hyphens, start with a letter and not end with a hyphen',
+  )
+  .refine((s) => !RESERVED_STORE_SLUGS.includes(s), 'is reserved');
+export const StorePhaseSchema = z.enum(['provisioning', 'ready', 'failed', 'deleting']);
+export const CreateStoreRequestSchema = z.strictObject({
+  slug: StoreSlugSchema,
+  name: displayName,
+  /** WordPress administrator email. The admin password is generated in-cluster and never returned. */
+  adminEmail: email,
+});
+/** Strict: no password, shared secret or Application Password can appear in a response. */
+export const StoreSchema = z.strictObject({
+  id,
+  slug,
+  name: z.string(),
+  adminEmail: z.string(),
+  namespace: z.string(),
+  storefrontUrl: z.string(),
+  phase: StorePhaseSchema,
+  /** Current provisioning step, or why it failed (bootstrap job failed, ImagePullBackOff, …). */
+  reason: z.string().nullable(),
+  /** The store's upstream (its woo-mcp): enabled once provisioned, then health-checked. */
+  upstreamEnabled: z.boolean(),
+  upstreamStatus: z.enum(['unknown', 'up', 'down']),
+  toolCount: z.number().int().nonnegative(),
+  /** Bumped by every Retry (a new bootstrap Job runs). */
+  generation: z.number().int().positive(),
+  provisionStartedAt: timestamp,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+});
+export const StoreResponseSchema = z.object({ store: StoreSchema });
+export const StoreListResponseSchema = z.object({
+  /** False when the gateway runs without MULTI_STORE_ENABLED (no Kubernetes access). */
+  enabled: z.boolean(),
+  maxStores: z.number().int(),
+  /** Storefronts are http(s)://<slug>.<domainSuffix>. */
+  domainSuffix: z.string(),
+  /** The chart's original store (upstream `woo`): shown, never deletable. */
+  builtIn: z.object({ name: z.string(), slug, storefrontUrl: z.string() }).nullable(),
+  stores: z.array(StoreSchema),
 });
 
 // ── Tools ────────────────────────────────────────────────────────────────────────────────────
@@ -408,6 +489,10 @@ export type UpdateHostedServerRequest = z.infer<typeof UpdateHostedServerRequest
 export type HostedServer = z.infer<typeof HostedServerSchema>;
 export type HostedServerListResponse = z.infer<typeof HostedServerListResponseSchema>;
 export type HostedPhase = z.infer<typeof HostedPhaseSchema>;
+export type CreateStoreRequest = z.infer<typeof CreateStoreRequestSchema>;
+export type Store = z.infer<typeof StoreSchema>;
+export type StorePhase = z.infer<typeof StorePhaseSchema>;
+export type StoreListResponse = z.infer<typeof StoreListResponseSchema>;
 export type Outcome = z.infer<typeof OutcomeSchema>;
 export type AuditQuery = z.infer<typeof AuditQuerySchema>;
 export type AuditEntry = z.infer<typeof AuditEntrySchema>;

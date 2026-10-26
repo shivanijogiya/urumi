@@ -37,6 +37,10 @@ import { normaliseAllowList } from './hosted/images.js';
 import type { KubeApi } from './hosted/kube.js';
 import { HostedReconciler } from './hosted/reconciler.js';
 import { registerHostedRoutes } from './hosted/routes.js';
+import type { StoreKubeApi } from './stores/kube.js';
+import { StoreProvisioner } from './stores/provisioner.js';
+import { registerStoreRoutes } from './stores/routes.js';
+import type { StoreSettings } from './stores/settings.js';
 import type { LookupFn } from './upstreams/ssrf.js';
 import { registerUserRoutes } from './users/routes.js';
 
@@ -55,6 +59,8 @@ declare module 'fastify' {
     tools: ToolService;
     /** Hosted-server reconciler (ADR 014); null when hosting is off. main.ts starts it. */
     hostedReconciler: HostedReconciler | null;
+    /** Store provisioner (ADR 015); null when multi-store is off. main.ts starts it. */
+    storeProvisioner: StoreProvisioner | null;
   }
 }
 
@@ -114,6 +120,22 @@ export interface AppDeps {
     lease?: Lease;
     intervalMs?: number;
   };
+  /**
+   * Multiple stores (ADR 015). Absent: GET /api/stores shows the built-in store only and creates
+   * are refused. main.ts passes an HttpStoreKubeApi; tests pass an in-memory fake.
+   */
+  stores?: {
+    kube: StoreKubeApi;
+    settings: StoreSettings;
+    maxStores: number;
+    scripts: Record<string, string>;
+    lease?: Lease;
+    intervalMs?: number;
+    now?: () => Date;
+    random?: () => string;
+  };
+  /** The chart's own store (upstream `woo`), listed as built-in. */
+  builtInStore?: { name: string; slug: string; storefrontUrl: string } | null;
 }
 
 /**
@@ -210,6 +232,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     allowedHosts,
     ...lookup,
     ...(deps.hosted ? { hostedNamespace: deps.hosted.namespace } : {}),
+    ...(deps.stores ? { storeHosts: true } : {}),
     log: app.log,
   });
   const registry = new ToolRegistry({
@@ -261,6 +284,31 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     allowedImages: normaliseAllowList(deps.hosted?.allowedImages ?? []),
     requireDigest: deps.hosted?.requireDigest ?? false,
     maxServers: deps.hosted?.maxServers ?? 5,
+  });
+  const storeProvisioner = deps.stores
+    ? new StoreProvisioner({
+        pool: deps.pool,
+        kube: deps.stores.kube,
+        registry,
+        encKey: deps.encKey,
+        log: app.log,
+        settings: deps.stores.settings,
+        scripts: deps.stores.scripts,
+        ...(deps.stores.lease ? { lease: deps.stores.lease } : {}),
+        ...(deps.stores.intervalMs ? { intervalMs: deps.stores.intervalMs } : {}),
+        ...(deps.stores.now ? { now: deps.stores.now } : {}),
+        ...(deps.stores.random ? { random: deps.stores.random } : {}),
+      })
+    : null;
+  app.decorate('storeProvisioner', storeProvisioner);
+  registerStoreRoutes(app, {
+    encKey: deps.encKey,
+    registry,
+    provisioner: storeProvisioner,
+    maxStores: deps.stores?.maxStores ?? 0,
+    domainSuffix: deps.stores?.settings.domainSuffix ?? '',
+    scheme: deps.stores?.settings.scheme ?? 'http',
+    builtIn: deps.builtInStore ?? null,
   });
   registerAuditRoutes(app);
   registerPermissionRoutes(app);
