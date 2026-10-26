@@ -293,18 +293,22 @@ minute, fire-and-forget.
 One `audit_log` row per `callTool` invocation, written before the caller gets the result
 (`core/call-tool.ts` → `audit/hook.ts` → `audit/repo.ts`).
 
-| Case                                                                   | `outcome` | `error_code`                                                 |
-| ---------------------------------------------------------------------- | --------- | ------------------------------------------------------------ |
-| Upstream returned a result                                             | `ok`      | null                                                         |
-| Upstream returned `isError: true`                                      | `error`   | `UPSTREAM_ERROR`                                             |
-| Upstream error, unreachable, result too large                          | `error`   | `UPSTREAM_ERROR` / `UPSTREAM_UNREACHABLE`                    |
-| 15 s deadline passed                                                   | `timeout` | `UPSTREAM_TIMEOUT`                                           |
-| Unknown tool / unqualified name, disabled server, non-object arguments | `denied`  | `TOOL_NOT_FOUND` / `UPSTREAM_DISABLED` / `VALIDATION_FAILED` |
-| Anything unexpected                                                    | `error`   | `INTERNAL`                                                   |
+| Case                                                                   | `outcome`      | `error_code`                                                 |
+| ---------------------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
+| Upstream returned a result                                             | `ok`           | null                                                         |
+| Upstream returned `isError: true`                                      | `error`        | `UPSTREAM_ERROR`                                             |
+| Upstream error, unreachable, result too large                          | `error`        | `UPSTREAM_ERROR` / `UPSTREAM_UNREACHABLE`                    |
+| 15 s deadline passed                                                   | `timeout`      | `UPSTREAM_TIMEOUT`                                           |
+| Unknown tool / unqualified name, disabled server, non-object arguments | `denied`       | `TOOL_NOT_FOUND` / `UPSTREAM_DISABLED` / `VALIDATION_FAILED` |
+| Anything unexpected                                                    | `error`        | `INTERNAL`                                                   |
+| `/mcp` request over the per-key / per-user limit (ADR 010)             | `rate_limited` | `RATE_LIMITED` (server `gateway`, tool `mcp`)                |
 
 Each row has user, API key (MCP) or null (chat), source, server slug (`unknown` if the name did
 not parse), the upstream's original tool name (capped at 200 chars), start time, duration,
-outcome and error code.
+outcome, error code and **error detail** (ADR 011): the fixed-vocabulary reason — `Timed out`,
+`Host did not resolve`, `Connection failed (ECONNREFUSED)`, `HTTP 503`, `MCP error -32603`,
+`Tool returned an error`, `Not permitted`, … — classified for the API (`errorReason`) and the
+Health / Metrics page. Never upstream text.
 
 **Not logged:** tool arguments and results (customer data, ADR 001); `tools/list` calls;
 requests with a missing, revoked or unknown key (no user to attribute them to — they are a 401 in
@@ -360,6 +364,14 @@ and `values-prod.yaml` (README "Local → VPS").
   `Retry-After`, audited `rate_limited`) and the `health` lease (`gateway_leases`): only the
   holder runs the 15 s health loop and writes upstream status; followers read status from the
   row. Tool caches stay per replica (correctness comes from the row). D10 proves it on k3d.
+- **Metrics** (ADR 011): each gateway pod serves Prometheus `GET /metrics` on internal port 9464
+  (`tool_calls_total`, `tool_call_duration_seconds`, `upstream_up`, last-check/last-success
+  timestamps, `rate_limited_total`, process metrics), exposed by Service
+  `<release>-gateway-metrics` only — never by the Ingress — and admitted by NetworkPolicy only
+  from pods labelled `urumi.io/metrics-scraper: "true"`. Per pod; sum over pods. Optional
+  `ServiceMonitor` (off). The admin **Health / Metrics** page computes per-server calls, error
+  rate and p50/p95 from `audit_log` (all replicas) and shows each upstream's classified last
+  failure and last success.
 - **SSRF allow-list**: `UPSTREAM_ALLOWED_HOSTS` defaults to `*.<namespace>.svc.cluster.local` so
   in-cluster upstreams pass the private-address check.
 
