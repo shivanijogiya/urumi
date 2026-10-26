@@ -112,11 +112,21 @@ checked_after_kill() {
 }
 poll 75 checked_after_kill || fail "everything.lastCheckedAt did not advance after the pod kill (health loop stopped?)"
 note "everything lastCheckedAt=$(upstream_field everything lastCheckedAt) (> kill at $killed_at); status=$(upstream_field everything status)"
-leaders=$(for p in $(k get pods -l "$SEL" -o name); do
-  # grep -c reads all input: grep -q would SIGPIPE kubectl and fail the pipeline (pipefail).
-  [ "$(k logs "$p" 2>/dev/null | grep -c 'health lease acquired')" -gt 0 ] && printf '%s ' "${p#pod/}"
-done)
-note "pods that acquired the health lease (current pods' logs): ${leaders:-none-yet}"
+# The lease is held by a pod that exists now (if the deleted pod held it, a survivor took over).
+leader_alive() {
+  local p
+  for p in $(ready_pods); do
+    # grep -c reads all input: grep -q would SIGPIPE kubectl and fail the pipeline (pipefail).
+    if [ "$(k logs "$p" 2>/dev/null | grep -c 'health lease acquired')" -gt 0 ]; then
+      leader=$p
+      return 0
+    fi
+  done
+  return 1
+}
+leader=""
+poll 75 leader_alive || fail "no current gateway pod holds the health lease after the kill"
+note "health lease holder after the kill: $leader (deleted: $victim)"
 
 # ── 4. Burst over the per-key limit ──────────────────────────────────────────────────────────
 burst=$(MCP_KEY_FILE=$KEY2 node "$LOAD" "$MCP_URL" burst 150 30) || fail "burst client failed: $burst"
