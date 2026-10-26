@@ -2,6 +2,7 @@
 import { createAnthropicClient } from './chat/anthropic.js';
 import { ConfigError, loadConfig } from './config.js';
 import { HealthMonitor } from './core/health.js';
+import { HEALTH_LEASE, Lease } from './core/leader.js';
 import { migrate } from './db/migrate.js';
 import { createPool } from './db/pool.js';
 import { seedAdmin } from './db/seed.js';
@@ -38,13 +39,20 @@ async function main(): Promise<void> {
     },
     track: config.track,
     faultInject: config.faultInject,
+    mcpRateLimits: config.mcpRateLimits,
   });
   if (!config.anthropicApiKey) server.log.warn('ANTHROPIC_API_KEY is not set: chat is disabled');
   if (config.faultInject.errorRate > 0 || config.faultInject.latencyMs > 0) {
     server.log.warn({ track: config.track, ...config.faultInject }, 'FAULT INJECTION is on');
   }
 
-  const health = new HealthMonitor({ pool, registry: server.tools.registry, log: server.log });
+  // Several replicas (ADR 010): only the holder of the `health` lease runs the 15 s loop.
+  const health = new HealthMonitor({
+    pool,
+    registry: server.tools.registry,
+    log: server.log,
+    lease: new Lease(pool, HEALTH_LEASE, config.podName),
+  });
 
   const shutdown = async (signal: string) => {
     server.log.info({ signal }, 'shutting down');

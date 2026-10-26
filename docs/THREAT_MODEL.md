@@ -126,20 +126,21 @@ Format per row: **mitigation implemented** (file) · **residual risk** · **not 
 
 | Limit                                             | Exists?                                                                                   | Where                        |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------- |
-| Login attempts                                    | yes: 10 / email, 30 failures / IP, per 15 min, in memory                                  | `auth/login-limiter.ts`      |
-| Chat requests                                     | yes: 20 / user / sliding minute → 429                                                     | `chat/rate-limit.ts`         |
+| Login attempts                                    | yes: 10 / email, 30 failures / IP, per 15 min, in memory **per replica** (2× with 2)      | `auth/login-limiter.ts`      |
+| Chat requests                                     | yes: 20 / user / sliding minute → 429, per replica                                        | `chat/rate-limit.ts`         |
 | Chat cost per request                             | yes: ≤ 8 tool rounds, 1024 output tokens per turn, 64 KB history, 60 s Anthropic deadline | `chat/service.ts`            |
 | `/mcp` body                                       | yes: 1 MB; unauthenticated requests rejected before the body is read                      | `mcp/endpoint.ts`            |
 | woo-mcp body / request time                       | yes: 1 MB, 30 s server request timeout                                                    | `apps/woo-mcp/src/server.ts` |
 | Upstream timeouts and payload caps                | yes                                                                                       | see 3.5                      |
-| `/mcp` request rate per key                       | **no**                                                                                    | —                            |
+| `/mcp` request rate per key and per user          | yes: Postgres token buckets shared by replicas → 429 + Retry-After, audited (ADR 010)     | `ratelimit/bucket.ts`        |
 | `/api/*` request rate (other than login and chat) | **no**                                                                                    | —                            |
 | Concurrent calls per user or per upstream         | **no**                                                                                    | —                            |
 | Resource limits on every container                | yes, enforced by `tests/infra/chart-checks.sh`                                            | `values.yaml`                |
 
-Residual: a valid key can flood `/mcp` and, through it, the upstreams and the WooCommerce store;
-every call is audited, so it is attributable. Rate limiters are per process and reset on
-restart.
+Residual: a valid key is held to its bucket (default 120/min, burst 60; per user 240/min,
+burst 120), but each refused request still costs two Postgres statements and one audit row, so a
+flood with a valid key still loads Postgres (attributable: every refusal is audited with the key).
+The login throttle and chat limit are per replica and reset on restart.
 
 ### 3.7 Elevation of privilege
 
@@ -155,7 +156,8 @@ restart.
    with a write grant; members have no write tools by default (ADR 008) (3.5).
 2. The SSRF allow-list admits every Service in the namespace (3.4).
 3. Upstream response bodies are buffered before the 256 KB cap is applied (3.5).
-4. No rate limit on `/mcp` per key (3.6); no key expiry (3.1).
+4. `/mcp` is rate limited per key and per user (ADR 010), but the login throttle and chat limit
+   are per replica (3.6); no key expiry (3.1).
 5. Audit log is mutable by the gateway's DB role; admin actions are not audited (3.2, 3.3).
 6. Secrets are plain Kubernetes Secrets; no encryption at rest or rotation tooling (3.4).
 7. Egress to the public internet on 80/443 is open for the gateway, WordPress and the bootstrap

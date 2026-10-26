@@ -5,7 +5,7 @@ import { MCP_TIMEOUTS } from '@urumi/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GatewayError } from '../src/core/call-tool.js';
 import { HealthMonitor } from '../src/core/health.js';
-import { TERMINATE_TIMEOUT_MS } from '../src/mcp-client/upstream-client.js';
+import { TERMINATE_TIMEOUT_MS, UpstreamError } from '../src/mcp-client/upstream-client.js';
 import { findUpstreamRow } from '../src/upstreams/repo.js';
 import { ADMIN, setupApp, type TestApp } from './helpers/app.js';
 import { deadUrl, startFakeUpstream, type FakeUpstream } from './helpers/fake-upstream.js';
@@ -116,6 +116,7 @@ describe('dead upstream', () => {
       registry: t.app.tools.registry,
       log: t.app.log,
       timeoutMs: 300,
+      retryDelayMs: 0,
     });
     const started = Date.now();
     await fast.tick();
@@ -224,5 +225,46 @@ describe('stateful upstream sessions', () => {
     await addUpstream('a', a.url);
     await monitor.tick();
     expect(a.requests.filter((r) => r.method === 'DELETE')).toHaveLength(0);
+  });
+});
+
+describe('transient failures (ADR 010)', () => {
+  it('a failed ping is retried once in the same tick: one blip does not mark it down', async () => {
+    const a = await startFakeUpstream({ identity: 'server-a' });
+    fakes.push(a);
+    const id = await addUpstream('a', a.url);
+    await monitor.tick();
+    expect((await row(id)).status).toBe('up');
+
+    // The first refresh of the next tick fails (as during a NetworkPolicy resync); the retry works.
+    const registry = t.app.tools.registry;
+    let failures = 1;
+    const flaky = Object.create(registry) as typeof registry;
+    flaky.refresh = async (r, ms) => {
+      if (failures-- > 0) throw new UpstreamError('timeout', 'Timed out');
+      return registry.refresh(r, ms);
+    };
+    const m = new HealthMonitor({
+      pool: t.pool,
+      registry: flaky,
+      log: t.app.log,
+      retryDelayMs: 50,
+    });
+    await m.tick();
+    expect(await row(id)).toMatchObject({ status: 'up', last_error: null });
+  });
+
+  it('two failures in a row mark it down, with the second failure as last_error', async () => {
+    const id = await addUpstream('gone', await deadUrl());
+    await t.pool.query(`UPDATE upstreams SET status = 'up' WHERE id = $1`, [id]);
+    const m = new HealthMonitor({
+      pool: t.pool,
+      registry: t.app.tools.registry,
+      log: t.app.log,
+      retryDelayMs: 50,
+    });
+    await m.tick();
+    expect(await row(id)).toMatchObject({ status: 'down' });
+    expect((await row(id)).last_error).toMatch(/Connection failed|Timed out/);
   });
 });

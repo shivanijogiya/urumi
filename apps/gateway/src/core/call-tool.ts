@@ -85,6 +85,7 @@ const OUTCOME: Partial<Record<ErrorCode, Outcome>> = {
   FORBIDDEN: 'denied',
   UPSTREAM_DISABLED: 'denied',
   VALIDATION_FAILED: 'denied',
+  RATE_LIMITED: 'rate_limited',
 };
 
 /** The audit outcome of a call that failed with `code` (chat reports the same in toolCalls). */

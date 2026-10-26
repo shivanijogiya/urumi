@@ -22,10 +22,11 @@ import {
 import { httpStatusFor, makeError, MCP_PATH, type ErrorCode } from '@urumi/contracts';
 import type { FastifyBaseLogger, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { authenticateApiKey } from '../auth/api-keys.js';
-import type { CallTool } from '../core/call-tool.js';
+import type { CallRecord, CallTool } from '../core/call-tool.js';
 import type { RegisteredTool } from '../core/registry.js';
 import type { ListToolsFor } from '../core/visible-tools.js';
 import { HttpError } from '../http/errors.js';
+import { checkMcpLimits, type McpRateLimits, type PgTokenBucket } from '../ratelimit/bucket.js';
 
 export const MCP_SERVER_NAME = 'urumi-gateway';
 const MCP_SERVER_VERSION = '0.1.0';
@@ -100,18 +101,64 @@ function sendUnauthenticated(reply: FastifyReply): FastifyReply {
     .send(makeError('UNAUTHENTICATED', 'Invalid or missing API key'));
 }
 
-export function registerMcpEndpoint(
-  app: FastifyInstance,
-  deps: { listToolsFor: ListToolsFor; callTool: CallTool },
-): void {
+/** audit_log server_slug / tool of a refused /mcp request (the body is never read). */
+export const RATE_LIMITED_SLUG = 'gateway';
+export const RATE_LIMITED_TOOL = 'mcp';
+
+export interface McpEndpointDeps {
+  listToolsFor: ListToolsFor;
+  callTool: CallTool;
+  /** Per-key and per-user limits shared across replicas (ADR 010). Absent: no limit. */
+  rateLimit?: { bucket: PgTokenBucket; limits: McpRateLimits } | undefined;
+  /** Writes the audit row of a rate-limited request. */
+  audit?: ((record: CallRecord) => Promise<void>) | undefined;
+  /** Observer of every rate-limited request (metrics). */
+  onRateLimited?: ((scope: 'key' | 'user') => void) | undefined;
+}
+
+export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps): void {
   app.decorateRequest('mcpCaller', null);
 
-  // onRequest: before the body is read, so an unauthenticated client cannot make us parse 1 MB.
+  // onRequest: before the body is read, so an unauthenticated or rate-limited client cannot make
+  // us parse 1 MB.
   const authenticate = async (req: FastifyRequest, reply: FastifyReply) => {
     // Postgres errors propagate to the error handler as a 500: never a 401 for a valid key.
     const auth = await authenticateApiKey(app.pool, req.headers.authorization);
     if (!auth) return sendUnauthenticated(reply);
     req.mcpCaller = { userId: auth.user.id, keyId: auth.keyId };
+    if (!deps.rateLimit) return;
+    const startedAt = new Date();
+    const decision = await checkMcpLimits(deps.rateLimit.bucket, deps.rateLimit.limits, {
+      keyId: auth.keyId,
+      userId: auth.user.id,
+    });
+    if (decision.allowed) return;
+    req.log.warn(
+      { userId: auth.user.id, keyId: auth.keyId, scope: decision.scope },
+      'mcp request rate limited',
+    );
+    deps.onRateLimited?.(decision.scope ?? 'key');
+    await deps.audit?.({
+      userId: auth.user.id,
+      apiKeyId: auth.keyId,
+      source: 'mcp',
+      serverSlug: RATE_LIMITED_SLUG,
+      tool: RATE_LIMITED_TOOL,
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      outcome: 'rate_limited',
+      errorCode: 'RATE_LIMITED',
+    });
+    const scope = decision.scope === 'user' ? 'this user' : 'this API key';
+    return reply
+      .code(httpStatusFor('RATE_LIMITED'))
+      .header('retry-after', String(decision.retryAfterSeconds))
+      .send(
+        makeError(
+          'RATE_LIMITED',
+          `Rate limit exceeded for ${scope}; retry after ${decision.retryAfterSeconds} s`,
+        ),
+      );
   };
 
   app.post(MCP_PATH, { onRequest: authenticate, bodyLimit: MCP_BODY_LIMIT }, async (req, reply) => {

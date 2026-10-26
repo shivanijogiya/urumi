@@ -55,6 +55,6 @@ export interface AuditLogRow {
   tool: string;
   started_at: Date;
   duration_ms: number;
-  outcome: 'ok' | 'error' | 'timeout' | 'denied';
+  outcome: 'ok' | 'error' | 'timeout' | 'denied' | 'rate_limited';
   error_code: string | null;
 }
