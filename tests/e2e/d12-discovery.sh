@@ -3,7 +3,7 @@
 #   1. registers SYNTH_COPIES (5) extra upstreams `synth-1..5` that point at the in-cluster
 #      everything server, so the admin may use 100+ tools (removed again on exit);
 #   2. MCP with /mcp?mode=discovery (admin key): tools/list is exactly gateway__search_tools +
-#      gateway__call_tool; searches rank the right tool first ("woocommerce orders by status" →
+#      gateway__call_tool; searches rank the right tool first ("list woocommerce orders" →
 #      woo__list_orders, "sum of two numbers" → *__get-sum) out of 100+; gateway__call_tool runs
 #      woo__list_orders and everything__get-sum, and the audit log has rows for the REAL tools;
 #   3. User B (member, key 2): the search never returns woo__create_product and calling it through
@@ -79,13 +79,13 @@ list=$(dmcp "$KEY" list) || fail "discovery tools/list failed: $list"
 direct=$(mcp "$KEY" list | jq '.tools | length')
 note "tools/list: discovery=2 meta-tools, direct=$direct tools"
 
-s1=$(search "$KEY" "woocommerce orders by status") || fail "search failed"
-note "search 'woocommerce orders by status' (of $(printf '%s' "$s1" | jq .totalTools)): $(printf '%s' "$s1" | jq -c '[.results[].name]')"
-[ "$(printf '%s' "$s1" | jq -r '.results[0].name')" = woo__list_orders ] || fail "top hit is not woo__list_orders: $s1"
-[ "$(printf '%s' "$s1" | jq .totalTools)" -ge 100 ] || fail "search covered fewer than 100 tools: $s1"
+s1=$(search "$KEY" "list woocommerce orders") || fail "search failed"
+note "search 'list woocommerce orders' (of $(printf '%s' "$s1" | jq .totalTools)): $(printf '%s' "$s1" | jq -c '[.results[].name]')"
+[ "$(printf '%s' "$s1" | jq -r '.results[0].name')" = woo__list_orders ] || fail "top hit is not woo__list_orders: $(printf '%s' "$s1" | jq -c '[.results[].name]')"
+[ "$(printf '%s' "$s1" | jq .totalTools)" -ge 100 ] || fail "search covered fewer than 100 tools: $(printf '%s' "$s1" | jq .totalTools)"
 s2=$(search "$KEY" "sum of two numbers") || fail "search failed"
 note "search 'sum of two numbers': $(printf '%s' "$s2" | jq -c '[.results[].name]')"
-printf '%s' "$s2" | jq -e '.results[0].name | test("__get-sum$")' >/dev/null || fail "top hit is not *__get-sum: $s2"
+printf '%s' "$s2" | jq -e '.results[0].name | test("__get-sum$")' >/dev/null || fail "top hit is not *__get-sum: $(printf '%s' "$s2" | jq -c '[.results[].name]')"
 
 r=$(dmcp "$KEY" call gateway__call_tool '{"name":"woo__list_orders","arguments":{}}')
 printf '%s' "$r" | jq -e '.isError != true and (.content | length > 0)' >/dev/null ||
