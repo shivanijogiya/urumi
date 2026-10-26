@@ -254,3 +254,11 @@ describe('loadConfig: scaling (ADR 010)', () => {
     expect(errorFor({ ...valid, POD_NAME: 'bad name!' }).message).toContain('POD_NAME');
   });
 });
+
+describe('loadConfig: metrics (ADR 011)', () => {
+  it('serves /metrics on 9464 by default; 0 turns it off', () => {
+    expect(loadConfig(valid).metricsPort).toBe(9464);
+    expect(loadConfig({ ...valid, METRICS_PORT: '0' }).metricsPort).toBe(0);
+    expect(errorFor({ ...valid, METRICS_PORT: '70000' }).message).toContain('METRICS_PORT');
+  });
+});

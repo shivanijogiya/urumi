@@ -52,13 +52,20 @@ export class GatewayMetrics {
     const pool = opts.pool;
     if (pool) {
       // Gauges filled from the upstreams table on every scrape (all replicas agree).
-      let rows: UpstreamGaugeRow[] = [];
-      const load = async () => {
-        rows = (
-          await pool.query<UpstreamGaugeRow>(
-            'SELECT slug, status, enabled, last_checked_at, last_ok_at FROM upstreams',
-          )
-        ).rows;
+      // prom-client runs a scrape's collectors concurrently: the three gauges share one query
+      // (memoised for a second, i.e. per scrape).
+      let cached: { at: number; rows: Promise<UpstreamGaugeRow[]> } | undefined;
+      const load = (): Promise<UpstreamGaugeRow[]> => {
+        if (!cached || Date.now() - cached.at > 1000) {
+          const rows = pool
+            .query<UpstreamGaugeRow>(
+              'SELECT slug, status, enabled, last_checked_at, last_ok_at FROM upstreams',
+            )
+            .then((r) => r.rows);
+          rows.catch(() => (cached = undefined));
+          cached = { at: Date.now(), rows };
+        }
+        return cached.rows;
       };
       new client.Gauge({
         name: 'upstream_up',
@@ -66,7 +73,7 @@ export class GatewayMetrics {
         labelNames: ['server'],
         registers: [this.registry],
         async collect() {
-          await load();
+          const rows = await load();
           this.reset();
           for (const r of rows)
             this.set({ server: r.slug }, r.enabled && r.status === 'up' ? 1 : 0);
@@ -77,7 +84,8 @@ export class GatewayMetrics {
         help: 'Unix time of the last health check of the upstream (0 = never)',
         labelNames: ['server'],
         registers: [this.registry],
-        collect() {
+        async collect() {
+          const rows = await load();
           this.reset();
           for (const r of rows) {
             this.set({ server: r.slug }, (r.last_checked_at?.getTime() ?? 0) / 1000);
@@ -89,7 +97,8 @@ export class GatewayMetrics {
         help: 'Unix time of the last successful health check of the upstream (0 = never)',
         labelNames: ['server'],
         registers: [this.registry],
-        collect() {
+        async collect() {
+          const rows = await load();
           this.reset();
           for (const r of rows) this.set({ server: r.slug }, (r.last_ok_at?.getTime() ?? 0) / 1000);
         },
