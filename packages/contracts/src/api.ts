@@ -158,7 +158,8 @@ export const ToolSchema = z.object({
 export const ToolListResponseSchema = z.object({ tools: z.array(ToolSchema) });
 
 // ── Audit ────────────────────────────────────────────────────────────────────────────────────
-export const OutcomeSchema = z.enum(['ok', 'error', 'timeout', 'denied']);
+/** `rate_limited`: an /mcp request refused by the per-key or per-user limit (ADR 010). */
+export const OutcomeSchema = z.enum(['ok', 'error', 'timeout', 'denied', 'rate_limited']);
 /** Query-string input. For members the gateway forces `userId` to their own id. */
 export const AuditQuerySchema = z.strictObject({
   userId: id.optional(),

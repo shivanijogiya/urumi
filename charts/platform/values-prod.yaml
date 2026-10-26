@@ -83,6 +83,8 @@ gateway:
   publicOrigin: https://app.example.com
   cookieSecure: true
   chatModel: claude-sonnet-5-5
+  # Two replicas (ADR 010): a pod restart or node drain never takes /mcp down.
+  replicas: 2
 
 # Canary (#23): switched on/off by scripts/canary/run.sh; app.tls also secures its IngressRoute.
 gatewayCanary:

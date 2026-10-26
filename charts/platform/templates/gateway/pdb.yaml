@@ -1,0 +1,16 @@
+{{- if and .Values.gateway.enabled (gt (int (.Values.gateway.replicas | default 1)) 1) }}
+{{- $ctx := dict "ctx" $ "component" "gateway" }}
+# Several gateway replicas (ADR 010): voluntary disruptions (node drain, cluster upgrade) leave at
+# least `minAvailable` stable gateway pods serving.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "platform.componentName" $ctx }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.gateway.podDisruptionBudget.minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ctx | nindent 6 }}
+{{- end }}

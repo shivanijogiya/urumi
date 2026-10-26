@@ -234,6 +234,27 @@ everything:
 # MCP gateway + admin API. Runs migrations and seeds the first admin on start.
 gateway:
   enabled: true
+  # Replicas of the stable gateway (ADR 010). Any replica serves any request: /mcp is stateless
+  # Streamable HTTP, sessions/rate limits/health status live in Postgres. values-local.yaml and
+  # values-prod.yaml run 2. With more than one, a PodDisruptionBudget keeps one pod up during node
+  # drains, and a soft anti-affinity / topology spread puts replicas on different nodes when it can.
+  replicas: 1
+  podDisruptionBudget:
+    # Applied only when replicas > 1.
+    minAvailable: 1
+  # Seconds a terminating pod keeps serving before SIGTERM, so the Ingress drops it from its
+  # endpoints first and no request is sent to a closed socket during a rollout or pod kill.
+  preStopSleepSeconds: 5
+  # /mcp rate limits (ADR 010): token buckets per API key and per user, in Postgres, so the limit
+  # holds across replicas. perMinute = sustained rate, burst = bucket size. 0 turns a limit off.
+  # Refused requests get 429 + Retry-After and an audit row with outcome `rate_limited`.
+  rateLimit:
+    perKey:
+      perMinute: 120
+      burst: 60
+    perUser:
+      perMinute: 240
+      burst: 120
   # Hosts the SSRF guard lets the gateway reach on private IPs (comma-separated, exact or *.suffix).
   # Empty = exactly the in-cluster upstreams this chart deploys (when enabled):
   # <release>-woo-mcp.<namespace>.svc.cluster.local and <release>-everything.<namespace>.svc...

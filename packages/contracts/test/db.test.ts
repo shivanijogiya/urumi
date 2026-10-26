@@ -30,3 +30,14 @@ describe('001_init.sql', () => {
     expect(auditTable).not.toMatch(/\b(arguments|args|result)\s+(jsonb|text)/i);
   });
 });
+
+describe('003_scaling.sql', () => {
+  const scaling = readFileSync(join(MIGRATIONS_DIR, '003_scaling.sql'), 'utf8');
+  it('adds the shared rate-limit buckets and leases, and the rate_limited outcome', () => {
+    expect(scaling).toMatch(/CREATE TABLE rate_limit_buckets \(/);
+    expect(scaling).toMatch(/CREATE TABLE gateway_leases \(/);
+    expect(scaling).toContain(
+      "CHECK (outcome IN ('ok', 'error', 'timeout', 'denied', 'rate_limited'))",
+    );
+  });
+});

@@ -15,7 +15,7 @@ export function formatTime(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString() : 'never';
 }
 
-/** Status (up/down/unknown) or outcome (ok/error/timeout/denied) pill. */
+/** Status (up/down/unknown) or outcome (ok/error/timeout/denied/rate_limited) pill. */
 export function Badge({ value }: { value: string }) {
   return <span className={`badge badge-${value}`}>{value}</span>;
 }

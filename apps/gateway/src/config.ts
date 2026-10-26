@@ -1,4 +1,5 @@
 // Environment config, validated once at startup. Errors name the variable, never its value.
+import { hostname } from 'node:os';
 import { MIGRATIONS_DIR } from '@urumi/contracts/db';
 import { z } from 'zod';
 import { DEFAULT_CHAT_MODEL } from './chat/service.js';
@@ -8,6 +9,12 @@ const optional = () => z.preprocess((v) => (v === '' ? undefined : v), z.string(
 
 const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 const ALLOWED_HOST_RE = new RegExp(`^(?:${LABEL}(?:\\.${LABEL})*|\\*\\.${LABEL}(?:\\.${LABEL})+)$`);
+
+const count = (fallback: number) =>
+  z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().min(0).max(1_000_000).default(fallback),
+  );
 
 const port = (fallback: number) => z.coerce.number().int().min(1).max(65535).default(fallback);
 
@@ -104,6 +111,20 @@ const EnvSchema = z.object({
     z.coerce.number().min(0).max(1).default(0),
   ),
   // Below the 15 s tool-call timeout, so an injected delay never looks like a hang.
+  // /mcp rate limits (ADR 010): token buckets per API key and per user, shared by all replicas
+  // through Postgres. perMinute = sustained rate, burst = bucket size; 0 turns that limit off.
+  MCP_RATE_LIMIT_KEY_PER_MIN: count(120),
+  MCP_RATE_LIMIT_KEY_BURST: count(60),
+  MCP_RATE_LIMIT_USER_PER_MIN: count(240),
+  MCP_RATE_LIMIT_USER_BURST: count(120),
+  // This replica's name for the health-loop lease (Kubernetes: the pod name). Default: hostname.
+  POD_NAME: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/, 'must be a hostname-like name')
+      .optional(),
+  ),
   FAULT_INJECT_LATENCY_MS: z.preprocess(
     (v) => (v === '' ? undefined : v),
     z.coerce.number().int().min(0).max(15_000).default(0),
@@ -138,6 +159,13 @@ export interface Config {
   track: string | null;
   /** Fault injection (forced-bad-release demo). Zero = off. */
   faultInject: { errorRate: number; latencyMs: number };
+  /** /mcp token buckets; a limit with perMinute or burst 0 is off. */
+  mcpRateLimits: {
+    perKey: { perMinute: number; burst: number };
+    perUser: { perMinute: number; burst: number };
+  };
+  /** Holder name for the health lease. */
+  podName: string;
 }
 
 export class ConfigError extends Error {
@@ -184,6 +212,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     chatModel: e.CHAT_MODEL,
     track: e.TRACK ?? null,
     faultInject: { errorRate: e.FAULT_INJECT_ERROR_RATE, latencyMs: e.FAULT_INJECT_LATENCY_MS },
+    mcpRateLimits: {
+      perKey: { perMinute: e.MCP_RATE_LIMIT_KEY_PER_MIN, burst: e.MCP_RATE_LIMIT_KEY_BURST },
+      perUser: { perMinute: e.MCP_RATE_LIMIT_USER_PER_MIN, burst: e.MCP_RATE_LIMIT_USER_BURST },
+    },
+    podName: e.POD_NAME ?? hostname(),
   };
 }
 

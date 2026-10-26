@@ -387,7 +387,8 @@ tr.revoked td {
   color: var(--danger);
 }
 
-.badge-timeout {
+.badge-timeout,
+.badge-rate_limited {
   background: #fdf1d3;
   color: var(--warn);
 }

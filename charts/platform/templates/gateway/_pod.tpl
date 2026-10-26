@@ -19,6 +19,23 @@ metadata:
     track: {{ .track }}
 spec:
   automountServiceAccountToken: false
+  # Soft rules (ADR 010): spread replicas over nodes when possible, never block scheduling.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                {{- include "platform.selectorLabels" (dict "ctx" $ "component" .component) | nindent 16 }}
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          {{- include "platform.selectorLabels" (dict "ctx" $ "component" .component) | nindent 10 }}
   securityContext:
     # node user of the node:22-alpine image.
     runAsUser: 1000
@@ -96,6 +113,21 @@ spec:
               name: {{ $.Values.secretName }}
               key: {{ $.Values.wooMcp.secretKeys.sharedSecret }}
         {{- end }}
+        # Several replicas (ADR 010): the pod name holds the health-loop lease; /mcp rate limits.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        {{- with $v.rateLimit }}
+        - name: MCP_RATE_LIMIT_KEY_PER_MIN
+          value: {{ .perKey.perMinute | int | quote }}
+        - name: MCP_RATE_LIMIT_KEY_BURST
+          value: {{ .perKey.burst | int | quote }}
+        - name: MCP_RATE_LIMIT_USER_PER_MIN
+          value: {{ .perUser.perMinute | int | quote }}
+        - name: MCP_RATE_LIMIT_USER_BURST
+          value: {{ .perUser.burst | int | quote }}
+        {{- end }}
         # Canary (#23): every response carries x-urumi-track: <track>.
         - name: TRACK
           value: {{ .track | quote }}
@@ -108,6 +140,13 @@ spec:
           value: {{ .latencyMs | default 0 | int | quote }}
         {{- end }}
         {{- end }}
+      {{- with $v.preStopSleepSeconds }}
+      # Keep serving while the Ingress removes this pod from its endpoints, then get SIGTERM.
+      lifecycle:
+        preStop:
+          exec:
+            command: ["sleep", {{ . | int | quote }}]
+      {{- end }}
       # Startup waits for Postgres (up to 2 min) and runs migrations before listening.
       startupProbe:
         httpGet:

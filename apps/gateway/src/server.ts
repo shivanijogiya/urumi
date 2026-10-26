@@ -19,6 +19,7 @@ import { registerKeyRoutes } from './keys/routes.js';
 import { registerMcpEndpoint } from './mcp/endpoint.js';
 import { registerPermissionRoutes } from './permissions/routes.js';
 import { UpstreamClient } from './mcp-client/upstream-client.js';
+import { PgTokenBucket, type McpRateLimits } from './ratelimit/bucket.js';
 import { registerToolRoutes } from './tools/routes.js';
 import { registerUpstreamRoutes } from './upstreams/routes.js';
 import type { LookupFn } from './upstreams/ssrf.js';
@@ -72,6 +73,8 @@ export interface AppDeps {
   track?: string | null;
   /** Forced-bad-release demo only (FAULT_INJECT_*): see src/http/canary.ts. Default off. */
   faultInject?: { errorRate: number; latencyMs: number };
+  /** /mcp per-key and per-user token buckets in Postgres (ADR 010). Default: no limit. */
+  mcpRateLimits?: McpRateLimits;
 }
 
 /**
@@ -192,7 +195,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerToolRoutes(app, { registry, listToolsFor });
   registerAuditRoutes(app);
   registerPermissionRoutes(app);
-  registerMcpEndpoint(app, { listToolsFor, callTool });
+  registerMcpEndpoint(app, {
+    listToolsFor,
+    callTool,
+    rateLimit: deps.mcpRateLimits
+      ? { bucket: new PgTokenBucket(deps.pool), limits: deps.mcpRateLimits }
+      : undefined,
+    audit: writeAudit,
+  });
   const anthropic = deps.chat?.anthropic;
   registerChatRoutes(app, {
     service: anthropic

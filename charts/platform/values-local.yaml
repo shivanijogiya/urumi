@@ -76,6 +76,24 @@ gateway:
   publicOrigin: http://app.localtest.me
   cookieSecure: false
   chatModel: claude-sonnet-5-5
+  # Two replicas (ADR 010); tests/e2e D10 proves both serve /mcp and survive a pod kill.
+  replicas: 2
+  # Smaller pods locally (8 GB laptops): two replicas fit where one did.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # Generous enough for the e2e load step, low enough that D10's burst of 150 hits the key limit.
+  rateLimit:
+    perKey:
+      perMinute: 600
+      burst: 100
+    perUser:
+      perMinute: 1200
+      burst: 400
 
 # Canary (#23): switched on/off per run by scripts/canary/run.sh (helm --reset-then-reuse-values).
 gatewayCanary:

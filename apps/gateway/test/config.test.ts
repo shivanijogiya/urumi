@@ -226,3 +226,31 @@ describe('loadConfig', () => {
     }
   });
 });
+
+describe('loadConfig: scaling (ADR 010)', () => {
+  it('defaults the /mcp rate limits and takes the pod name for the health lease', () => {
+    const c = loadConfig({ ...valid, POD_NAME: 'urumi-gateway-abc12' });
+    expect(c.mcpRateLimits).toEqual({
+      perKey: { perMinute: 120, burst: 60 },
+      perUser: { perMinute: 240, burst: 120 },
+    });
+    expect(c.podName).toBe('urumi-gateway-abc12');
+    expect(loadConfig(valid).podName.length).toBeGreaterThan(0); // hostname fallback
+  });
+
+  it('reads the limits; 0 turns a limit off; garbage is rejected by name', () => {
+    const c = loadConfig({
+      ...valid,
+      MCP_RATE_LIMIT_KEY_PER_MIN: '600',
+      MCP_RATE_LIMIT_KEY_BURST: '0',
+      MCP_RATE_LIMIT_USER_PER_MIN: '900',
+      MCP_RATE_LIMIT_USER_BURST: '300',
+    });
+    expect(c.mcpRateLimits.perKey).toEqual({ perMinute: 600, burst: 0 });
+    expect(c.mcpRateLimits.perUser).toEqual({ perMinute: 900, burst: 300 });
+    expect(errorFor({ ...valid, MCP_RATE_LIMIT_KEY_BURST: '-1' }).message).toContain(
+      'MCP_RATE_LIMIT_KEY_BURST',
+    );
+    expect(errorFor({ ...valid, POD_NAME: 'bad name!' }).message).toContain('POD_NAME');
+  });
+});
