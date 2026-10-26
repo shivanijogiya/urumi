@@ -82,6 +82,10 @@ wordpress:
     repository: wordpress
     tag: 6-php8.3-apache
     pullPolicy: IfNotPresent
+  # Run Apache as www-data (33) from the start, all capabilities dropped; port 80 via the
+  # net.ipv4.ip_unprivileged_port_start=0 pod sysctl. false = the image's root start (it binds 80
+  # as root, then Apache drops to www-data).
+  runAsNonRoot: true
   # DB host:port. Empty = the chart's MariaDB Service on 3306.
   databaseHost: ''
   persistence:
@@ -267,6 +271,43 @@ gateway:
     limits:
       cpu: 500m
       memory: 256Mi
+
+# NetworkPolicies (brief item 6; docs/adr/009-network-policies.md, templates/networkpolicy/):
+# a namespace-wide default deny for ingress AND egress, plus an allow policy per real flow
+# (Traefik -> dashboard/gateway/WordPress; gateway -> Postgres, woo-mcp, everything, internet
+# 80/443; woo-mcp -> WordPress; WordPress -> MariaDB (+ internet); bootstrap Job -> MariaDB,
+# WordPress, Kubernetes API, internet; every pod -> cluster DNS). Needs a CNI that enforces
+# NetworkPolicy (k3s's built-in kube-router does).
+networkPolicy:
+  enabled: true
+  # Where the ingress controller's pods run (k3s: Traefik in kube-system).
+  ingressController:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik
+  # Cluster DNS pods (k3s: CoreDNS in kube-system).
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+  # Kubernetes API for the bootstrap Job's kubectl: the `kubernetes` Service's endpoint
+  # (control-plane IP, port 6443 on k3s). Narrow `cidr` to that IP/32 when it is known.
+  kubeApi:
+    cidr: 0.0.0.0/0
+    ports: [443, 6443]
+  # "Internet" egress (gateway, bootstrap Job, and WordPress if enabled below): these ports to any
+  # address except private, loopback, link-local (metadata) and CGNAT ranges.
+  internet:
+    ports: [80, 443]
+    except:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+      - 169.254.0.0/16
+      - 127.0.0.0/8
+  # WordPress itself may reach the internet (update checks; on a VPS, its own public URL).
+  wordpressInternetEgress: true
 
 # Canary of the gateway (#23, H2; docs/adr/003-canary.md). Off by default; driven by
 # scripts/canary/run.sh, decided by scripts/canary/verdict.py. When enabled: a second Deployment

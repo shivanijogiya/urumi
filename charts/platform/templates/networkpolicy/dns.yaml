@@ -1,0 +1,28 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $dns := .Values.networkPolicy.dns }}
+# Every pod may resolve names through the cluster DNS (CoreDNS in kube-system on k3s), and
+# nothing else on port 53.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-allow-dns
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dns.podLabels | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

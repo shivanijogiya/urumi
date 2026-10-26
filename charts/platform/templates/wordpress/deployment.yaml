@@ -22,16 +22,32 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
+        {{- if $v.runAsNonRoot }}
+        # Apache runs as www-data (33), the docroot owner, from the start: no root step. The
+        # image's entrypoint skips its chown when not root, and the Apache run/lock/log dirs are
+        # world-writable in the php:apache base. Port 80 without root or NET_BIND_SERVICE comes
+        # from the namespaced, Kubernetes-"safe" sysctl below (ports >= 0 are unprivileged).
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "0"
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: wordpress
           image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
           imagePullPolicy: {{ $v.image.pullPolicy }}
-          # The official apache image starts as root to bind port 80 and chown the docroot,
-          # then Apache drops to www-data, so runAsNonRoot is not possible with it.
           securityContext:
             allowPrivilegeEscalation: false
+            {{- if $v.runAsNonRoot }}
+            capabilities:
+              drop: ["ALL"]
+            {{- end }}
           ports:
             - name: http
               containerPort: 80

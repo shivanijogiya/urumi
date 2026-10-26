@@ -1,0 +1,16 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default deny: every pod in the namespace, ingress AND egress. Each flow the platform needs is
+# allowed by its own policy in this directory (or templates/<component>/networkpolicy.yaml).
+# Policies are additive, so a pod's allowed traffic is the union of the policies selecting it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-default-deny
+  labels:
+    {{- include "platform.labels" (dict "ctx" $ "component" "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}

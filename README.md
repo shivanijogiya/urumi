@@ -286,7 +286,10 @@ Steps on a single-node k3s VPS (Traefik is k3s's default ingress, matching `ingr
    is written for the local cluster: it reads the Secret through the pinned `k3d-urumi` kubectl
    context.
 6. Egress: the bootstrap Job downloads WooCommerce from wordpress.org; the gateway needs
-   `gitlab.com:443` and `api.anthropic.com:443`. No egress NetworkPolicy exists today.
+   `gitlab.com:443` and `api.anthropic.com:443`. The chart's default-deny NetworkPolicies
+   (ADR 009) allow exactly these as "internet 80/443" (private ranges excluded). On a non-k3s
+   cluster, set `networkPolicy.ingressController` / `networkPolicy.dns` to your ingress controller
+   and DNS pods, and narrow `networkPolicy.kubeApi.cidr` to the API server address.
 
 **Honest status.** The VPS deployment is optional (issue #25, first in the cut order) and has
 **not** been run. What is tested: `tests/infra/chart-checks.sh` renders the chart with both

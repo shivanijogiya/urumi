@@ -7,6 +7,9 @@
 #     resources.limits (Jobs run to completion: exempt from the probe requirement)
 #   - no `kind: Secret` is rendered (the chart only references an existing Secret)
 #   - at least one workload is rendered (guards against an empty render passing silently)
+#   - NetworkPolicies (networkPolicy.enabled): a namespace default-deny with podSelector {} and
+#     policyTypes Ingress + Egress is rendered, and every workload's pod template is selected by at
+#     least one other (allow) policy, so default deny never silently cuts a workload off
 # YAML -> JSON uses `kubectl annotate --local` (no API server); node does the assertions.
 # Each values file is rendered as is and with the gateway canary enabled (+canary).
 # Prints PASS/FAIL per variant; exits non-zero if any check fails.
@@ -58,6 +61,27 @@ for (const d of docs) {
   }
 }
 if (workloads === 0) problems.push("no Deployment/StatefulSet rendered");
+const policies = docs.filter((d) => d.kind === "NetworkPolicy");
+const selects = (sel, labels) =>
+  Object.entries(sel.matchLabels || {}).every(([k, v]) => labels[k] === v) &&
+  (sel.matchExpressions || []).every((e) => e.operator === "In" && e.values.includes(labels[e.key]));
+const isDefaultDeny = (p) =>
+  Object.keys(p.spec.podSelector || {}).length === 0 && !p.spec.ingress && !p.spec.egress;
+if (process.env.EXPECT_NETPOL === "1") {
+  const deny = policies.find(isDefaultDeny);
+  if (!deny) problems.push("no default-deny NetworkPolicy (podSelector {}, no rules)");
+  else if (!["Ingress", "Egress"].every((t) => (deny.spec.policyTypes || []).includes(t)))
+    problems.push(`NetworkPolicy/${deny.metadata.name}: default deny must cover Ingress and Egress`);
+  for (const d of docs) {
+    if (!["Deployment", "StatefulSet", "Job"].includes(d.kind)) continue;
+    const labels = (d.spec.template.metadata || {}).labels || {};
+    const allows = policies.filter(
+      (p) => !isDefaultDeny(p) && Object.keys(p.spec.podSelector).length && selects(p.spec.podSelector, labels),
+    );
+    if (!allows.length) problems.push(`${d.kind}/${d.metadata.name}: no allow NetworkPolicy selects its pods`);
+  }
+}
+console.log(`  ${policies.length} NetworkPolicies`);
 for (const p of problems) console.log("  " + p);
 console.log(`  ${docs.length} objects, ${workloads} workloads + ${jobs} jobs checked`);
 process.exit(problems.length ? 1 : 0);
@@ -84,7 +108,8 @@ for variant in values-local.yaml values-prod.yaml values-local.yaml+canary value
     failed=1
     continue
   fi
-  if printf '%s\n' "$json" | node -e "$CHECK_JS"; then
+  # Both shipped values files enable the default-deny NetworkPolicies.
+  if printf '%s\n' "$json" | EXPECT_NETPOL=1 node -e "$CHECK_JS"; then
     echo "PASS $name"
   else
     echo "FAIL $name"

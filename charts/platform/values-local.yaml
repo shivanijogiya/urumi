@@ -32,6 +32,7 @@ mariadb:
     storageClass: local-path
 
 wordpress:
+  runAsNonRoot: true
   persistence:
     size: 2Gi
     storageClass: local-path
@@ -79,3 +80,9 @@ gateway:
 # Canary (#23): switched on/off per run by scripts/canary/run.sh (helm --reset-then-reuse-values).
 gatewayCanary:
   enabled: false
+
+# Default-deny NetworkPolicies + per-flow allows (enforced by k3s's kube-router). Traefik and
+# CoreDNS are k3s's, in kube-system (the defaults).
+networkPolicy:
+  enabled: true
+  wordpressInternetEgress: true
