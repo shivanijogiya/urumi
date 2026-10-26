@@ -55,7 +55,9 @@ export default async function setup(project: TestProject) {
     'postgres:16-alpine',
   ]);
   const containerId = stdout.trim();
-  const stop = () => run('docker', ['rm', '-f', containerId]).then(() => undefined);
+  // -v: also delete the container's anonymous data volume. `--rm` alone does not when the
+  // container is removed with `docker rm -f`, and every run would leak its test databases (GBs).
+  const stop = () => run('docker', ['rm', '-f', '-v', containerId]).then(() => undefined);
 
   try {
     const port = (await run('docker', ['port', containerId, '5432/tcp'])).stdout
