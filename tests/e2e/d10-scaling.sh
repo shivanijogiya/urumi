@@ -3,10 +3,11 @@
 #   1. the stable gateway Deployment has 2 ready pods;
 #   2. ONE MCP client session (official SDK, admin API key) runs initialize + 60 x (tools/list +
 #      tools/call everything__echo); after 20 iterations both pods' logs show /mcp requests from
-#      this run (traffic is spread over both), then one pod is deleted mid-run; every one of the
+#      this run (traffic is spread over both), then the pod holding the health lease is deleted
+#      mid-run; every one of the
 #      60 iterations must succeed (stateless /mcp + preStop drain: no sticky session to lose);
-#   3. the Deployment is back to 2 ready pods, and the upstream health loop keeps writing
-#      last_checked_at after the kill (the `health` lease moved or stayed; one writer);
+#   3. the Deployment is back to 2 ready pods, the `health` lease is held by a live pod (it moved
+#      off the deleted one), and the health loop keeps writing last_checked_at;
 #   4. a burst of 150 pings with a second key gets HTTP 429 with Retry-After and error code
 #      RATE_LIMITED once the key's bucket (values-local: burst 100) is empty, and the audit log
 #      has `rate_limited` rows for the admin. Both keys are revoked at the end.
@@ -39,6 +40,13 @@ want=$(k get deploy "$RELEASE-gateway" -o jsonpath='{.spec.replicas}')
 poll 120 two_ready || fail "fewer than 2 ready gateway pods: $(ready_pods | tr '\n' ' ')"
 pods=$(ready_pods)
 note "ready gateway pods: $(printf '%s' "$pods" | tr '\n' ' ')"
+
+# The health lease (gateway_leases, ADR 010) holder, unexpired, read from Postgres (the source of truth).
+lease_holder() {
+  k exec "$RELEASE-postgres-0" -- sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT holder FROM gateway_leases WHERE name = '"'health'"' AND expires_at > now()"' \
+    2>/dev/null
+}
 
 # ── Keys (admin; revoked on exit) ────────────────────────────────────────────────────────────
 [ "$(api "$ADMIN_JAR" GET /api/auth/me)" = 200 ] || fail "admin session expired; run: tests/e2e/run.sh seed"
@@ -86,7 +94,9 @@ for p in $pods; do
 done
 note "/mcp requests per pod after $(cat "$progress") iterations:$spread"
 
-victim=$(printf '%s\n' "$pods" | head -1)
+# Delete the pod holding the health lease (the harder case: the health loop must move too).
+victim=$(lease_holder)
+[ "$(printf '%s\n' "$pods" | grep -cx -- "${victim:-none}")" -gt 0 ] || victim=$(printf '%s\n' "$pods" | head -1)
 note "deleting gateway pod $victim mid-run (iteration $(cat "$progress")/$ITER)"
 killed_at=$(server_now)
 k delete pod "$victim" --wait=false >/dev/null || fail "kubectl delete pod $victim failed"
@@ -112,13 +122,6 @@ checked_after_kill() {
 }
 poll 75 checked_after_kill || fail "everything.lastCheckedAt did not advance after the pod kill (health loop stopped?)"
 note "everything lastCheckedAt=$(upstream_field everything lastCheckedAt) (> kill at $killed_at); status=$(upstream_field everything status)"
-# The health lease (gateway_leases, ADR 010) is held, unexpired, by a pod that is Ready now: if
-# the deleted pod held it, a survivor took over. Read from Postgres, the source of truth.
-lease_holder() {
-  k exec "$RELEASE-postgres-0" -- sh -c \
-    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT holder FROM gateway_leases WHERE name = '"'health'"' AND expires_at > now()"' \
-    2>/dev/null
-}
 leader_alive() {
   leader=$(lease_holder)
   [ -n "$leader" ] && [ "$(ready_pods | grep -cx "$leader")" -gt 0 ]
