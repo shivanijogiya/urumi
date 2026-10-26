@@ -1,0 +1,178 @@
+{{- if and .Values.multiStore.enabled (not .Values.bootstrap.enabled) }}
+{{- fail "multiStore.enabled needs bootstrap.enabled: store bootstrap Jobs reuse its scripts ConfigMap" }}
+{{- end }}
+{{- if .Values.multiStore.enabled }}
+{{- $ctx := dict "ctx" $ "component" "stores" }}
+{{- $sa := include "platform.gatewayServiceAccount" . }}
+{{- $manager := include "platform.stores.managerRole" . }}
+{{- $bootstrap := include "platform.stores.bootstrapRole" . }}
+# Multiple stores (ADR 015). The gateway ServiceAccount's ONLY cluster-scoped rights: manage
+# namespaces, and create RoleBindings that may reference nothing but the two ClusterRoles below
+# (`bind` limited by resourceNames: no escalation beyond what those roles grant). The admission
+# policy further down confines all of it to namespaces named store-<slug> that carry the store label,
+# so the gateway cannot create, relabel or delete any other namespace, nor bind a role in one.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "platform.stores.provisionerRole" . }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+rules:
+  # `patch` = server-side apply of the store namespace (its labels / Pod Security level).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  # `create` cannot be limited by name; the admission policy limits it to store namespaces.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: [{{ $manager | quote }}, {{ $bootstrap | quote }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "platform.stores.provisionerRole" . }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "platform.stores.provisionerRole" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+---
+# What the gateway may do INSIDE a store namespace (bound there by a RoleBinding the gateway creates
+# with the namespace; never bound cluster-wide). Exactly what the provisioner calls: server-side
+# apply (create + patch) of the store's objects, reads for status, deleting old bootstrap Jobs.
+# Secrets: create + patch only, so the gateway can never read a Secret back. No pods/exec|log, no
+# bare pods, no Roles, no ServiceAccount tokens, no delete of PVCs (only the whole namespace).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $manager }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - resourcequotas
+      - limitranges
+      - serviceaccounts
+      - configmaps
+      - services
+      - persistentvolumeclaims
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "deployments"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["create", "patch"]
+---
+# The store bootstrap Job's publish container: write the one Secret it owns (woo-api). Same rule as
+# the built-in store's Job (templates/bootstrap/rbac.yaml), bound per store namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $bootstrap }}
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["woo-api"]
+    verbs: ["get", "patch", "update"]
+  # `create` cannot be limited by resourceNames; only inside the store's own namespace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+{{- if .Values.multiStore.admissionPolicy.enabled }}
+{{- $user := printf "system:serviceaccount:%s:%s" .Release.Namespace $sa }}
+{{- $nsRe := "^store-[a-z](?:[a-z0-9-]{0,18}[a-z0-9])$" }}
+---
+# Enforced by the API server for requests made AS THE GATEWAY only: whatever the gateway's code or a
+# stolen token asks for, namespaces must be store namespaces (name store-<slug>, label
+# urumi.io/store=true, Pod Security `restricted`; UPDATE/DELETE only of a namespace that already was
+# one), and RoleBindings must live in such a namespace, reference one of the two ClusterRoles above
+# and name only the gateway (manager) or the namespace's own store-bootstrap ServiceAccount.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "platform.stores.prefix" . }}-store-guard
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["namespaces"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: requests-by-the-gateway
+      expression: {{ printf "request.userInfo.username == '%s'" $user | quote }}
+  validations:
+    - expression: >-
+        request.resource.resource != 'namespaces' ||
+        (request.operation == 'DELETE' ? oldObject : object).metadata.name.matches('{{ $nsRe }}')
+      message: the gateway may only manage namespaces named store-<slug>
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation == 'DELETE' ||
+        (has(object.metadata.labels) && 'urumi.io/store' in object.metadata.labels &&
+        object.metadata.labels['urumi.io/store'] == 'true' &&
+        'pod-security.kubernetes.io/enforce' in object.metadata.labels &&
+        object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted')
+      message: a store namespace must carry urumi.io/store=true and enforce Pod Security restricted
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation == 'CREATE' ||
+        (has(oldObject.metadata.labels) && 'urumi.io/store' in oldObject.metadata.labels &&
+        oldObject.metadata.labels['urumi.io/store'] == 'true')
+      message: the gateway may only change or delete namespaces it created as stores
+    - expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (namespaceObject.metadata.name.matches('{{ $nsRe }}') &&
+        has(namespaceObject.metadata.labels) && 'urumi.io/store' in namespaceObject.metadata.labels &&
+        namespaceObject.metadata.labels['urumi.io/store'] == 'true')
+      message: the gateway may only create RoleBindings in store namespaces
+    - expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (object.roleRef.kind == 'ClusterRole' && has(object.subjects) && size(object.subjects) == 1 &&
+        object.subjects[0].kind == 'ServiceAccount' &&
+        ((object.roleRef.name == '{{ $manager }}' && object.subjects[0].name == '{{ $sa }}' &&
+        object.subjects[0].namespace == '{{ .Release.Namespace }}') ||
+        (object.roleRef.name == '{{ $bootstrap }}' && object.subjects[0].name == 'store-bootstrap' &&
+        object.subjects[0].namespace == namespaceObject.metadata.name)))
+      message: >-
+        a store RoleBinding may only bind the store-manager role to the gateway, or the
+        store-bootstrap role to the namespace's store-bootstrap ServiceAccount
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "platform.stores.prefix" . }}-store-guard
+  labels:
+    {{- include "platform.labels" $ctx | nindent 4 }}
+spec:
+  policyName: {{ include "platform.stores.prefix" . }}-store-guard
+  validationActions: [Deny]
+{{- end }}
+{{- end }}

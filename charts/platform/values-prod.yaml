@@ -107,3 +107,12 @@ hosted:
   requireDigest: true
   allowedImages:
     - registry.gitlab.com/<group>/<project>/
+
+# Multiple stores (ADR 015): off in production unless you opt in. It gives the gateway cluster-wide
+# rights on namespaces (confined by the admission policy to store-* namespaces); turn it on
+# deliberately, with a wildcard DNS name + TLS for domainSuffix.
+multiStore:
+  enabled: false
+  maxStores: 3
+  domainSuffix: store.example.com
+  scheme: https

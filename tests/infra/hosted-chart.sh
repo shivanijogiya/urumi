@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Offline checks for the hosted-MCP-server RBAC and isolation in charts/platform (ADR 014). Renders
 # the chart with `helm template` and asserts that:
-#   - no ClusterRole / ClusterRoleBinding is rendered at all;
+#   - no ClusterRole / ClusterRoleBinding is rendered for hosting (the multi-store ones, ADR 015,
+#     are checked by tests/infra/stores-chart.sh);
 #   - the gateway's Role lives in the hosted namespace and grants EXACTLY:
 #       apps/deployments get,list,create,patch,delete; services + secrets create,patch,delete;
 #       pods get,list — no wildcards, no pods/exec|log|attach, no RBAC, no Secret reads;
@@ -38,7 +39,8 @@ const enabled = process.env.HOSTED === "1";
 const NS = "urumi-hosted";
 const problems = [];
 const of = (kind) => docs.filter((d) => d.kind === kind);
-for (const k of ["ClusterRole", "ClusterRoleBinding"]) if (of(k).length) problems.push(`renders a ${k}`);
+const notStores = (d) => d.metadata.labels["app.kubernetes.io/component"] !== "stores";
+for (const k of ["ClusterRole", "ClusterRoleBinding"]) if (of(k).filter(notStores).length) problems.push(`renders a ${k}`);
 const roles = of("Role").filter((r) => r.metadata.name.endsWith("hosted-manager"));
 const gwDeploy = of("Deployment").find((d) => d.metadata.name === "urumi-gateway");
 const pod = gwDeploy.spec.template.spec;
@@ -124,5 +126,5 @@ check() { # check <name> <HOSTED 0|1> <values> [helm args...]
 check "values-local.yaml" 1 values-local.yaml
 check "values-prod.yaml" 1 values-prod.yaml
 check "values-local.yaml+canary" 1 values-local.yaml --set gatewayCanary.enabled=true --set gatewayCanary.image.tag=c1
-check "hosted off" 0 values-local.yaml --set hosted.enabled=false
+check "hosted off" 0 values-local.yaml --set hosted.enabled=false --set multiStore.enabled=false
 exit "$failed"

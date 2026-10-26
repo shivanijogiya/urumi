@@ -19,9 +19,10 @@ metadata:
     track: {{ .track }}
 spec:
   automountServiceAccountToken: false
-  {{- if $.Values.hosted.enabled }}
-  # Hosted MCP servers (ADR 014): this ServiceAccount's only rights are a Role in the hosted
-  # namespace. Its token is projected below (not automounted) and only while hosted.enabled.
+  {{- if include "platform.gatewayKubeAccess" $ }}
+  # Hosted MCP servers (ADR 014): a Role in the hosted namespace; multiple stores (ADR 015): the
+  # store ClusterRoles in templates/stores/rbac.yaml. The token is projected below (not automounted)
+  # and only while either feature is on.
   serviceAccountName: {{ include "platform.gatewayServiceAccount" $ }}
   {{- end }}
   # Soft rules (ADR 010): spread replicas over nodes when possible, never block scheduling.
@@ -144,6 +145,21 @@ spec:
           value: {{ .maxServers | int | quote }}
         {{- end }}
         {{- end }}
+        {{- if $.Values.multiStore.enabled }}
+        # Multiple stores (ADR 015): namespaces store-<slug>, confined by the store admission policy.
+        - name: MULTI_STORE_ENABLED
+          value: "true"
+        - name: MULTI_STORE_MAX_STORES
+          value: {{ $.Values.multiStore.maxStores | int | quote }}
+        - name: MULTI_STORE_CONFIG
+          value: {{ include "platform.stores.config" $ | quote }}
+        {{- end }}
+        {{- if $.Values.wordpress.enabled }}
+        - name: BUILTIN_STORE_URL
+          value: {{ include "platform.storeUrl" $ | quote }}
+        - name: BUILTIN_STORE_NAME
+          value: {{ $.Values.bootstrap.storeTitle | quote }}
+        {{- end }}
         # Internal Prometheus listener (ADR 011); 0 = off.
         - name: METRICS_PORT
           value: {{ ternary $v.metrics.port 0 (and $v.metrics.enabled true) | quote }}
@@ -209,7 +225,13 @@ spec:
         # The root filesystem is read-only; give Node a writable /tmp.
         - name: tmp
           mountPath: /tmp
-        {{- if $.Values.hosted.enabled }}
+        {{- if $.Values.multiStore.enabled }}
+        # Bootstrap scripts for store Jobs (same files as the built-in store's Job).
+        - name: store-bootstrap
+          mountPath: /etc/urumi/store-bootstrap
+          readOnly: true
+        {{- end }}
+        {{- if include "platform.gatewayKubeAccess" $ }}
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
@@ -218,7 +240,12 @@ spec:
     - name: tmp
       emptyDir:
         sizeLimit: 64Mi
-    {{- if $.Values.hosted.enabled }}
+    {{- if $.Values.multiStore.enabled }}
+    - name: store-bootstrap
+      configMap:
+        name: {{ include "platform.componentName" (dict "ctx" $ "component" "bootstrap") }}
+    {{- end }}
+    {{- if include "platform.gatewayKubeAccess" $ }}
     # Short-lived token (rotated by the kubelet; the gateway re-reads it per request) + cluster CA.
     - name: kube-api-access
       projected:
