@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     chat: {
       anthropic: config.anthropicApiKey ? createAnthropicClient(config.anthropicApiKey) : null,
       model: config.chatModel,
+      discoveryThreshold: config.chatDiscoveryThreshold,
     },
     track: config.track,
     faultInject: config.faultInject,

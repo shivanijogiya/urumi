@@ -31,6 +31,7 @@ import { authenticateApiKey } from '../auth/api-keys.js';
 import type { CallRecord, CallTool } from '../core/call-tool.js';
 import type { RegisteredTool } from '../core/registry.js';
 import type { ListToolsFor } from '../core/visible-tools.js';
+import { isMetaTool, META_TOOLS, type Discovery } from '../discovery/meta-tools.js';
 import { HttpError } from '../http/errors.js';
 import { checkMcpLimits, type McpRateLimits, type PgTokenBucket } from '../ratelimit/bucket.js';
 
@@ -42,6 +43,23 @@ export const MCP_BODY_LIMIT = 1024 * 1024;
 interface McpCaller {
   userId: string;
   keyId: string;
+}
+
+/**
+ * Tool mode of one /mcp request (ADR 012). `discovery`: tools/list returns only
+ * gateway__search_tools + gateway__call_tool. Chosen per request by `?mode=discovery` (works with
+ * any client that takes only a URL) or the `x-urumi-tool-mode: discovery` header.
+ */
+export type ToolMode = 'direct' | 'discovery';
+export const TOOL_MODE_HEADER = 'x-urumi-tool-mode';
+
+/** The requested mode, or null if the value is not one we know (→ 400). */
+export function toolModeOf(req: Pick<FastifyRequest, 'query' | 'headers'>): ToolMode | null {
+  const q = (req.query as Record<string, unknown> | undefined)?.mode;
+  const h = req.headers[TOOL_MODE_HEADER];
+  const raw = typeof q === 'string' ? q : typeof h === 'string' ? h : undefined;
+  if (raw === undefined || raw === '' || raw === 'direct') return 'direct';
+  return raw === 'discovery' ? 'discovery' : null;
 }
 
 declare module 'fastify' {
@@ -68,7 +86,13 @@ function errorResult(code: ErrorCode, message: string): CallToolResult {
 /** One request's MCP server: knows only the caller, its visible tools and callTool. */
 function createServer(
   caller: McpCaller,
-  deps: { listToolsFor: ListToolsFor; callTool: CallTool; log: FastifyBaseLogger },
+  mode: ToolMode,
+  deps: {
+    listToolsFor: ListToolsFor;
+    callTool: CallTool;
+    discovery: Discovery;
+    log: FastifyBaseLogger;
+  },
 ): McpServer {
   const mcp = new McpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
@@ -76,6 +100,7 @@ function createServer(
   );
   mcp.server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
+      if (mode === 'discovery') return { tools: META_TOOLS };
       return { tools: (await deps.listToolsFor(caller.userId)).map(toMcpTool) };
     } catch (err) {
       // The registry only throws when the database is down; its message is not for clients.
@@ -87,10 +112,12 @@ function createServer(
     // MCP lets a client omit arguments for a tool without parameters.
     const args = req.params.arguments ?? {};
     try {
-      return await deps.callTool(caller.userId, req.params.name, args, {
-        source: 'mcp',
-        apiKeyId: caller.keyId,
-      });
+      const opts = { source: 'mcp' as const, apiKeyId: caller.keyId };
+      // The meta-tools answer in either mode; gateway__call_tool still goes through callTool.
+      if (isMetaTool(req.params.name)) {
+        return await deps.discovery.handle(caller.userId, req.params.name, args, opts);
+      }
+      return await deps.callTool(caller.userId, req.params.name, args, opts);
     } catch (err) {
       if (err instanceof HttpError) return errorResult(err.code, err.message);
       deps.log.error({ err: { message: (err as Error).message } }, 'mcp tools/call failed');
@@ -114,6 +141,7 @@ export const RATE_LIMITED_TOOL = 'mcp';
 export interface McpEndpointDeps {
   listToolsFor: ListToolsFor;
   callTool: CallTool;
+  discovery: Discovery;
   /** Per-key and per-user limits shared across replicas (ADR 010). Absent: no limit. */
   rateLimit?: { bucket: PgTokenBucket; limits: McpRateLimits } | undefined;
   /** Writes the audit row of a rate-limited request. */
@@ -174,7 +202,13 @@ export function registerMcpEndpoint(app: FastifyInstance, deps: McpEndpointDeps)
 
   app.post(MCP_PATH, { onRequest: authenticate, bodyLimit: MCP_BODY_LIMIT }, async (req, reply) => {
     const caller = req.mcpCaller!;
-    const mcp = createServer(caller, { ...deps, log: req.log });
+    const mode = toolModeOf(req);
+    if (!mode) {
+      return reply
+        .code(httpStatusFor('VALIDATION_FAILED'))
+        .send(makeError('VALIDATION_FAILED', 'Invalid tool mode: use direct or discovery'));
+    }
+    const mcp = createServer(caller, mode, { ...deps, log: req.log });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

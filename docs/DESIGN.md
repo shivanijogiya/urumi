@@ -202,6 +202,14 @@ Implemented in `packages/contracts/src/naming.ts`, applied in
   (`duplicate qualified tool name after sanitising`).
 - The chat service additionally skips any tool whose name fails Claude's regex or whose
   `inputSchema.type` is not `object` (`toAnthropicTools`).
+- **Reserved slug `gateway`** (ADR 012): the gateway's own meta-tools `gateway__search_tools` and
+  `gateway__call_tool`; an upstream cannot be created with it.
+- **Many tools: discovery mode** (ADR 012). `/mcp?mode=discovery` (or header
+  `x-urumi-tool-mode: discovery`) lists only the two meta-tools: a BM25 keyword search over the
+  caller's permitted tools, and a call that goes through `callTool` (permissions, timeout, audit
+  of the real tool). The chat agent switches to it when a user's permitted tools exceed
+  `CHAT_DISCOVERY_THRESHOLD` (default 40) and reports the real tools executed. D12 proves it on
+  142 tools.
 
 ## 6. Failure isolation (G4)
 

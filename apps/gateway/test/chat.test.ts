@@ -407,7 +407,7 @@ describe('what the model is sent', () => {
       { role: 'user', content: 'And now?' },
     ];
     const body = await chatOk({ messages: history });
-    expect(body).toEqual({ reply: 'Three.', toolCalls: [] });
+    expect(body).toEqual({ reply: 'Three.', toolCalls: [], toolMode: 'direct' });
     expect(fake.requests[0]!.messages).toEqual(history);
   });
 });

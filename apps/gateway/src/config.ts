@@ -117,6 +117,9 @@ const EnvSchema = z.object({
   MCP_RATE_LIMIT_KEY_BURST: count(60),
   MCP_RATE_LIMIT_USER_PER_MIN: count(240),
   MCP_RATE_LIMIT_USER_BURST: count(120),
+  // Chat discovery mode (ADR 012): above this many permitted tools the model gets only
+  // gateway__search_tools + gateway__call_tool. 0 = always discovery.
+  CHAT_DISCOVERY_THRESHOLD: count(40),
   // Internal Prometheus listener (ADR 011): GET /metrics only, never routed by the Ingress.
   // 0 turns it off.
   METRICS_PORT: z.preprocess(
@@ -174,6 +177,8 @@ export interface Config {
   podName: string;
   /** Internal /metrics port; 0 = off. */
   metricsPort: number;
+  /** Chat switches to discovery mode above this many tools. */
+  chatDiscoveryThreshold: number;
 }
 
 export class ConfigError extends Error {
@@ -226,6 +231,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     podName: e.POD_NAME ?? hostname(),
     metricsPort: e.METRICS_PORT,
+    chatDiscoveryThreshold: e.CHAT_DISCOVERY_THRESHOLD,
   };
 }
 

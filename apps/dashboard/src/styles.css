@@ -544,3 +544,19 @@ ul.plain {
   background: #eceff3;
   color: var(--muted);
 }
+
+/* ── Chat: discovery mode (ADR 012) ────────────────────────────────────── */
+.discovery-note {
+  margin-bottom: 0.4em;
+  font-size: 0.9em;
+}
+
+.discovery-note ul {
+  margin: 0.2em 0 0;
+  padding-left: 1.2em;
+}
+
+.tools-used .via {
+  color: var(--muted);
+  font-size: 0.85em;
+}

@@ -11,8 +11,10 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  CALL_TOOL_NAME,
   makeError,
   parseQualifiedName,
+  SEARCH_TOOLS_NAME,
   type ChatRequest,
   type ChatResponse,
   type User,
@@ -20,6 +22,7 @@ import {
 import type { FastifyBaseLogger } from 'fastify';
 import { outcomeFor, UNKNOWN_SLUG, type CallTool } from '../core/call-tool.js';
 import type { RegisteredTool } from '../core/registry.js';
+import { META_TOOLS, type Discovery } from '../discovery/meta-tools.js';
 import { HttpError } from '../http/errors.js';
 import type { AnthropicLike } from './anthropic.js';
 
@@ -28,6 +31,8 @@ export const CHAT_MAX_TOKENS = 1024;
 export const ANTHROPIC_TIMEOUT_MS = 60_000;
 export const MAX_TOOL_ROUNDS = 8;
 export const MAX_TOOL_RESULT_BYTES = 16 * 1024;
+/** Above this many permitted tools the model gets the two discovery meta-tools instead (ADR 012). */
+export const DEFAULT_DISCOVERY_THRESHOLD = 40;
 /** Total characters of history content per request (each message is ≤ 8000 by contract). */
 export const MAX_HISTORY_CHARS = 64 * 1024;
 export const ROUND_CAP_NOTE = `(Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls, so this answer may be incomplete. Ask a narrower question to continue.)`;
@@ -39,6 +44,7 @@ const MAX_NAME_LEN = 200;
 
 type Log = Pick<FastifyBaseLogger, 'warn' | 'error'>;
 type ToolCall = ChatResponse['toolCalls'][number];
+type Search = NonNullable<ChatResponse['discoverySearches']>[number];
 
 export interface ChatServiceDeps {
   anthropic: AnthropicLike;
@@ -47,6 +53,10 @@ export interface ChatServiceDeps {
   callTool: CallTool;
   /** CHAT_MODEL; default claude-sonnet-5-5. */
   model?: string;
+  /** Discovery mode (ADR 012); absent = always direct. */
+  discovery?: Discovery;
+  /** CHAT_DISCOVERY_THRESHOLD: switch to discovery above this many tools. Default 40. */
+  discoveryThreshold?: number;
 }
 
 export interface ChatService {
@@ -130,9 +140,13 @@ function istNow(): string {
   }).format(new Date());
 }
 
+const DISCOVERY_PROMPT =
+  'You have access to many tools through two gateway tools: first call gateway__search_tools with keywords for the task to find the right tool and its input schema, then call gateway__call_tool with that exact tool name and arguments. Search again with other keywords if nothing fits.';
+
 /** Fixed text plus the signed-in user and the current IST time; no upstream content. */
-export function systemPrompt(email: string): string {
+export function systemPrompt(email: string, mode: 'direct' | 'discovery' = 'direct'): string {
   return [
+    ...(mode === 'discovery' ? [DISCOVERY_PROMPT] : []),
     `You are the Urumi store assistant, acting for the signed-in user ${email}.`,
     'Use the provided tools to look up store data before answering; do not guess.',
     `The store timezone is Asia/Kolkata (IST). "Today" means the current calendar day in IST, and orders are dated by date_created. The current time is ${istNow()} IST.`,
@@ -179,15 +193,27 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     slugs: Map<string, string>,
     log: Log,
   ): Promise<{ call: ToolCall; result: Anthropic.ToolResultBlockParam }> {
-    const name = use.name.slice(0, MAX_NAME_LEN);
-    const serverSlug = slugs.get(use.name) ?? parseQualifiedName(use.name)?.slug ?? UNKNOWN_SLUG;
+    // Discovery mode: gateway__call_tool runs the REAL tool; report (and audit) that one.
+    const viaDiscovery = use.name === CALL_TOOL_NAME && deps.discovery !== undefined;
+    const input = use.input as { name?: unknown } | null;
+    const target =
+      viaDiscovery && typeof input?.name === 'string' ? input.name : viaDiscovery ? '' : use.name;
+    const name = (target || use.name).slice(0, MAX_NAME_LEN);
+    const serverSlug = slugs.get(target) ?? parseQualifiedName(target)?.slug ?? UNKNOWN_SLUG;
     const started = Date.now();
     const done = (
       outcome: ToolCall['outcome'],
       errorCode: ToolCall['errorCode'],
       content: string,
     ) => ({
-      call: { name, serverSlug, outcome, durationMs: Date.now() - started, errorCode },
+      call: {
+        name,
+        serverSlug,
+        outcome,
+        durationMs: Date.now() - started,
+        errorCode,
+        ...(viaDiscovery ? { via: 'discovery' as const } : {}),
+      },
       result: {
         type: 'tool_result' as const,
         tool_use_id: use.id,
@@ -196,7 +222,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       },
     });
     try {
-      const result = await deps.callTool(userId, use.name, use.input, { source: 'chat' });
+      const result = viaDiscovery
+        ? (await deps.discovery!.call(userId, use.input, { source: 'chat' })).result
+        : await deps.callTool(userId, use.name, use.input, { source: 'chat' });
       return result.isError
         ? done('error', 'UPSTREAM_ERROR', resultText(result))
         : done('ok', null, resultText(result));
@@ -213,18 +241,65 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
   }
 
+  /** gateway__search_tools in discovery mode: no upstream call, no audit row. */
+  async function runSearch(
+    userId: string,
+    use: Anthropic.ToolUseBlock,
+  ): Promise<{ search: Search | null; result: Anthropic.ToolResultBlockParam }> {
+    try {
+      const found = await deps.discovery!.search(userId, use.input);
+      return {
+        search: {
+          query: found.query.slice(0, 200),
+          resultCount: found.results.length,
+          top: found.results.slice(0, 5).map((r) => r.name),
+        },
+        result: {
+          type: 'tool_result',
+          tool_use_id: use.id,
+          content: truncateUtf8(JSON.stringify(found), MAX_TOOL_RESULT_BYTES),
+        },
+      };
+    } catch (err) {
+      const code = err instanceof HttpError ? err.code : 'INTERNAL';
+      const message = err instanceof HttpError ? err.message : 'Internal error';
+      return {
+        search: null,
+        result: {
+          type: 'tool_result',
+          tool_use_id: use.id,
+          content: JSON.stringify(makeError(code, message)),
+          is_error: true,
+        },
+      };
+    }
+  }
+
   return {
     async chat(user, history, log) {
       const registered = await deps.listToolsFor(user.id);
-      const tools = toAnthropicTools(registered, log);
+      const threshold = deps.discoveryThreshold ?? DEFAULT_DISCOVERY_THRESHOLD;
+      const mode: 'direct' | 'discovery' =
+        deps.discovery && registered.length > threshold ? 'discovery' : 'direct';
+      const tools =
+        mode === 'discovery'
+          ? META_TOOLS.map((t) => ({
+              name: t.name,
+              description: t.description ?? '',
+              input_schema: { ...t.inputSchema, type: 'object' as const },
+            }))
+          : toAnthropicTools(registered, log);
       const slugs = new Map(registered.map((t) => [t.name, t.serverSlug]));
       // A history trimmed by the browser may start mid-conversation: the API wants a user turn first.
       const first = history.findIndex((m) => m.role === 'user');
       const messages: Anthropic.MessageParam[] = history
         .slice(first)
         .map((m) => ({ role: m.role, content: m.content }));
-      const system = systemPrompt(user.email);
+      const system = systemPrompt(user.email, mode);
       const toolCalls: ToolCall[] = [];
+      const searches: Search[] = [];
+      const extra = () =>
+        mode === 'discovery' ? { toolMode: mode, discoverySearches: searches } : { toolMode: mode };
       const said: string[] = [];
 
       for (let round = 0; ; round++) {
@@ -243,14 +318,20 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         const uses = res.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
         if (res.stop_reason !== 'tool_use' || !uses.length) {
           const reply = res.stop_reason === 'max_tokens' ? `${text}\n\n(Reply cut short.)` : text;
-          return { reply: reply.trim() || '(No reply.)', toolCalls };
+          return { reply: reply.trim() || '(No reply.)', toolCalls, ...extra() };
         }
         if (round === MAX_TOOL_ROUNDS) {
-          return { reply: [...said, ROUND_CAP_NOTE].join('\n\n'), toolCalls };
+          return { reply: [...said, ROUND_CAP_NOTE].join('\n\n'), toolCalls, ...extra() };
         }
         messages.push({ role: 'assistant', content: res.content });
         const results: Anthropic.ToolResultBlockParam[] = [];
         for (const use of uses) {
+          if (mode === 'discovery' && use.name === SEARCH_TOOLS_NAME) {
+            const { search, result } = await runSearch(user.id, use);
+            if (search) searches.push(search);
+            results.push(result);
+            continue;
+          }
           const { call, result } = await runTool(user.id, use, slugs, log);
           toolCalls.push(call);
           results.push(result);

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ErrorCodeSchema } from './errors.js';
 import { FailureReasonSchema } from './failures.js';
-import { SLUG_RE } from './naming.js';
+import { RESERVED_SLUGS, SLUG_RE } from './naming.js';
 
 // Request schemas are strict (unknown fields → VALIDATION_FAILED); timestamps are ISO-8601 UTC strings.
 const id = z.uuid();
@@ -117,7 +117,8 @@ export const CredentialSchema = z.discriminatedUnion('type', [
 const upstreamUrl = z.url({ protocol: /^https?$/ }).max(2048);
 
 export const CreateUpstreamRequestSchema = z.strictObject({
-  slug, // immutable after creation
+  // Immutable after creation; `gateway` is reserved for the gateway's meta-tools (ADR 012).
+  slug: slug.refine((s) => !RESERVED_SLUGS.includes(s), 'is reserved'),
   name: displayName,
   url: upstreamUrl,
   enabled: z.boolean().default(true),
@@ -262,6 +263,7 @@ export const ChatRequestSchema = z.strictObject({
 });
 export const ChatResponseSchema = z.object({
   reply: z.string(),
+  /** Real tools executed (also when the model reached them through gateway__call_tool). */
   toolCalls: z.array(
     z.object({
       name: z.string(),
@@ -269,8 +271,19 @@ export const ChatResponseSchema = z.object({
       outcome: OutcomeSchema,
       durationMs: z.number().int().nonnegative(),
       errorCode: ErrorCodeSchema.nullable(),
+      /** Present when the call went through discovery mode's gateway__call_tool (ADR 012). */
+      via: z.literal('discovery').optional(),
     }),
   ),
+  /**
+   * `discovery` when the user's permitted tools exceeded the threshold, so the model got only
+   * gateway__search_tools + gateway__call_tool (ADR 012). Absent from older gateways.
+   */
+  toolMode: z.enum(['direct', 'discovery']).optional(),
+  /** The model's tool searches in discovery mode (not audited: they run no upstream tool). */
+  discoverySearches: z
+    .array(z.object({ query: z.string(), resultCount: z.number().int(), top: z.array(z.string()) }))
+    .optional(),
 });
 
 export type Role = z.infer<typeof RoleSchema>;
