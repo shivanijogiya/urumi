@@ -1,6 +1,14 @@
 /** Upstream slug: 1–20 chars of `[a-z0-9-]`, no leading/trailing hyphen. `_` is excluded, so a slug never contains `__`. */
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/;
 export const SEPARATOR = '__';
+/**
+ * Slugs an upstream may not take: `gateway` names the gateway's own meta-tools
+ * (`gateway__search_tools`, `gateway__call_tool`, ADR 012) and its audit rows (rate limits).
+ */
+export const RESERVED_SLUGS: readonly string[] = ['gateway'];
+export const GATEWAY_SLUG = 'gateway';
+export const SEARCH_TOOLS_NAME = 'gateway__search_tools';
+export const CALL_TOOL_NAME = 'gateway__call_tool';
 /** Claude tool names must match `^[a-zA-Z0-9_-]{1,64}$`. */
 export const MAX_QUALIFIED_LEN = 64;
 

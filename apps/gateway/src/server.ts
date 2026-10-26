@@ -12,6 +12,7 @@ import { createChatService } from './chat/service.js';
 import { createCallTool, type CallRecord, type CallTool } from './core/call-tool.js';
 import { ToolRegistry } from './core/registry.js';
 import { createListToolsFor, type ListToolsFor } from './core/visible-tools.js';
+import { createDiscovery } from './discovery/meta-tools.js';
 import { registerCanary } from './http/canary.js';
 import { registerCsrfGuard } from './http/csrf.js';
 import { HttpError } from './http/errors.js';
@@ -70,7 +71,7 @@ export interface AppDeps {
    * Chat agent (#19). `anthropic` is null (or `chat` absent) when ANTHROPIC_API_KEY is unset:
    * /api/chat then answers 503. Tests inject a scripted client.
    */
-  chat?: { anthropic: AnthropicLike | null; model?: string };
+  chat?: { anthropic: AnthropicLike | null; model?: string; discoveryThreshold?: number };
   /** Canary (#23): x-urumi-track header value (TRACK). Default none. */
   track?: string | null;
   /** Forced-bad-release demo only (FAULT_INJECT_*): see src/http/canary.ts. Default off. */
@@ -192,6 +193,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     },
   });
   const listToolsFor = createListToolsFor(deps.pool, registry);
+  const discovery = createDiscovery({ listToolsFor, callTool });
   app.decorate('tools', { registry, listToolsFor, callTool });
 
   registerUserRoutes(app);
@@ -203,6 +205,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerMcpEndpoint(app, {
     listToolsFor,
     callTool,
+    discovery,
     rateLimit: deps.mcpRateLimits
       ? { bucket: new PgTokenBucket(deps.pool), limits: deps.mcpRateLimits }
       : undefined,
@@ -218,6 +221,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           listToolsFor,
           callTool,
           ...(deps.chat?.model ? { model: deps.chat.model } : {}),
+          discovery,
+          ...(deps.chat?.discoveryThreshold !== undefined
+            ? { discoveryThreshold: deps.chat.discoveryThreshold }
+            : {}),
         })
       : null,
     limiter: new ChatRateLimiter(),
