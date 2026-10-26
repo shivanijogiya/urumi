@@ -5,6 +5,52 @@ by `charts/platform` on local k3d. Architecture and mechanisms are in [`DESIGN.m
 this document says what can go wrong, what stops it (with the implementing file), what is left,
 and what is not done. "Not done" items are real gaps, not plans.
 
+## 0. The brief's four questions, answered directly
+
+Short answers; the tables in §3 have the detail and the implementing files.
+
+**Shared upstream credentials: what can a member do with a credential they never see?**
+An admin stores one credential per upstream (e.g. the GitLab token). It is encrypted at rest
+(AES-256-GCM, `crypto/secretbox.ts`, key from the Secret `urumi-env`), decrypted only inside
+`callTool` for the outgoing request (`upstreams/decrypt-for-call.ts`), and never returned by any
+API, log line or the dashboard (members do not even see the upstream URL). A member can therefore
+only _use_ it, and only through the gateway: they can call the tools their tool permissions allow
+(ADR 008: members are read-only by default), `/mcp` calls are rate-limited per key and per user, and
+every call is written to `audit_log` under their own user id. What they **can** do is anything
+those permitted tools can do with the upstream account's rights — the credential's scope is the
+real limit, so admins should give each upstream the narrowest token that works. They cannot copy
+the credential, use it outside the gateway, or call a tool they were not granted (`FORBIDDEN`,
+audited `denied`).
+
+**Why client tokens are not passed through to upstream servers.**
+A client's API key or OAuth token proves _who the caller is to the gateway_; it is checked
+(SHA-256 lookup) and consumed at `/mcp`, and the outgoing request carries only the upstream's own
+stored credential (`credentialHeaders` in `upstreams/decrypt-for-call.ts`). Passing the client's
+token on would (1) hand a gateway credential to every upstream, so a malicious or compromised
+upstream could replay it against the gateway or against other upstreams, (2) be meaningless to the
+upstream, which never issued it (the MCP spec forbids this "token passthrough"), and (3) bypass the
+gateway's permission, rate-limit and audit checks, which only work if the gateway is the single
+place that decides. Tokens are audience-bound to the gateway (OAuth `resource`, ADR 013).
+
+**Untrusted upstreams: tool descriptions written to manipulate the model.**
+Everything an upstream returns is treated as data. Descriptions are stripped of control and bidi
+characters and capped at 500 characters; tool names are sanitised and prefixed with the server
+slug, so an upstream cannot impersonate another server's tool (`core/registry.ts`, `naming.ts`).
+Descriptions are sent only as tool definitions, never in the system prompt, and the system prompt
+tells the model that tool descriptions and results are untrusted. Upstream `instructions` are
+never forwarded. Even if the model is fooled, it can only call tools the _logged-in user_ is
+allowed to call, at most 8 rounds per message, and each call is audited. Remaining risk: an admin's
+chat (or a member with write grants) can still be tricked into a write without confirmation (§4).
+
+**What one team member can do to another.**
+Very little. A member cannot see or revoke another member's API keys, cannot read another member's
+audit rows (the API forces the filter to their own id), cannot change roles, users, upstreams or
+permissions (`requireAdmin`), and has their own `/mcp` rate-limit bucket. Chat history is not stored on
+the server. What they _can_ affect: data in the shared upstream accounts (e.g. if granted a write
+tool on the store, they can change an order another member also sees) — but every such call is
+audited under their name. An admin can do more (create/disable users, revoke anyone's keys, change
+permissions) but cannot demote or disable themselves, and the last admin cannot be removed.
+
 ## 1. Assets
 
 | Asset                                          | Where it lives                                               | Why it matters                                           |
